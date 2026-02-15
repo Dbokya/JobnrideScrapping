@@ -3,3 +3,4 @@ firebase-admin
 beautifulsoup4
 pytz
 google-genai
+openai
