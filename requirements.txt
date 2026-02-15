@@ -3,4 +3,4 @@ firebase-admin
 beautifulsoup4
 pytz
 google-genai
-openai
+openai==0.28.0
