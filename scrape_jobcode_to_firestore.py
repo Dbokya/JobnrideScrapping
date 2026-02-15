@@ -11,14 +11,14 @@ import time
 import openai
 
 # ------------------ FIREBASE INIT ------------------
-cred = credentials.Certificate("serviceAccountKey.json")
+cred = credentials.Certificate("serviceaccount/jobnride-97d77-firebase-adminsdk-fbsvc-20ce6e6129.json")
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 # ------------------ OPENAI INIT ------------------
 OPENAI_API_KEY = os.getenv("OPEN_AI_API_KEY")
 if not OPENAI_API_KEY:
-    raise ValueError("OPEN_AI_API_KEY not set in environment variables.")
+    raise ValueError("OPEN_AI_API_KEY environment variable is required")
 openai.api_key = OPENAI_API_KEY
 
 # ------------------ CONFIG ------------------
@@ -41,6 +41,58 @@ def classify_job(title, content):
         return "fresher"
     return "experienced"
 
+def normalize_experience(experience_text):
+    """Normalize experience to standard year ranges: 0-2, 2-5, 5-10, 10+"""
+    if not experience_text or experience_text.lower() in ["not specified", "n/a", "na"]:
+        return "Not Specified"
+    
+    text = experience_text.lower()
+    
+    # Handle freshers explicitly
+    if any(word in text for word in ["fresher", "freshers", "no experience", "entry level", "student", "students"]):
+        return "0-2 years"
+    
+    # Extract numbers from text
+    numbers = re.findall(r'\d+', text)
+    
+    if not numbers:
+        return experience_text  # Return as is if no numbers found
+    
+    numbers = [int(n) for n in numbers]
+    
+    # If only one number found
+    if len(numbers) == 1:
+        num = numbers[0]
+        if num == 0:
+            return "0-2 years"
+        elif num <= 2:
+            return "0-2 years"
+        elif num <= 5:
+            return "2-5 years"
+        elif num <= 10:
+            return "5-10 years"
+        else:
+            return "10+ years"
+    
+    # If two or more numbers found (range given)
+    min_exp = min(numbers)
+    max_exp = max(numbers)
+    
+    if max_exp <= 2:
+        return "0-2 years"
+    elif max_exp <= 5:
+        if min_exp <= 2:
+            return "0-2 years" if max_exp <= 2 else "2-5 years"
+        return "2-5 years"
+    elif max_exp <= 10:
+        if min_exp <= 2:
+            return "2-5 years"
+        elif min_exp <= 5:
+            return "5-10 years"
+        return "5-10 years"
+    else:
+        return "10+ years"
+
 def extract_apply_link(html):
     soup = BeautifulSoup(html, "html.parser")
     apply_button = soup.find("a", string=re.compile("Apply", re.IGNORECASE))
@@ -48,22 +100,324 @@ def extract_apply_link(html):
         return apply_button["href"]
     return ""
 
+def extract_company_from_url(url):
+    """Extract company name from apply link URL."""
+    if not url:
+        return None
+    
+    try:
+        # Common job board patterns
+        patterns = [
+            r'greenhouse\.io/([^/]+)',           # greenhouse.io/companyname
+            r'jobs\.lever\.co/([^/]+)',          # jobs.lever.co/companyname
+            r'apply\.workable\.com/([^/]+)',     # apply.workable.com/companyname
+            r'boards\.greenhouse\.io/([^/]+)',   # boards.greenhouse.io/companyname
+            r'careers\.([^./]+)\.',              # careers.companyname.com
+            r'jobs\.([^./]+)\.',                 # jobs.companyname.com
+            r'//([^./]+)\.com/careers',          # companyname.com/careers
+            r'//([^./]+)\.com/jobs',             # companyname.com/jobs
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url, re.IGNORECASE)
+            if match:
+                company = match.group(1)
+                # Clean up the company name
+                company = company.replace('-', ' ').replace('_', ' ')
+                # Capitalize each word
+                company = ' '.join(word.capitalize() for word in company.split())
+                return company
+        
+        # Try to extract from domain as fallback
+        domain_match = re.search(r'//(?:www\.)?([^./]+)', url)
+        if domain_match:
+            domain = domain_match.group(1)
+            # Skip common job board domains
+            job_boards = ['greenhouse', 'lever', 'workable', 'indeed', 'linkedin', 'naukri', 'monster']
+            if domain.lower() not in job_boards:
+                company = domain.replace('-', ' ').replace('_', ' ')
+                company = ' '.join(word.capitalize() for word in company.split())
+                return company
+                
+    except Exception as e:
+        print(f"⚠ Error extracting company from URL: {e}")
+    
+    return None
+
+def extract_responsibilities(html):
+    """Extract key responsibilities section from HTML content."""
+    soup = BeautifulSoup(html, "html.parser")
+    responsibilities = []
+    
+    # Find headings that contain "responsibility" or "responsibilities"
+    headings = soup.find_all(['h2', 'h3', 'h4'])
+    
+    for heading in headings:
+        heading_text = heading.get_text(strip=True).lower()
+        
+        if 'responsibilit' in heading_text or 'key role' in heading_text or 'duties' in heading_text:
+            # Found a responsibilities section, extract content after this heading
+            current = heading.find_next_sibling()
+            
+            while current and current.name not in ['h2', 'h3', 'h4']:
+                if current.name == 'ul':
+                    # Extract list items
+                    for li in current.find_all('li'):
+                        text = li.get_text(strip=True)
+                        if text and len(text) > 5:  # Skip very short items
+                            responsibilities.append(text)
+                elif current.name == 'p':
+                    # Extract paragraph text
+                    text = current.get_text(strip=True)
+                    if text and len(text) > 10:
+                        responsibilities.append(text)
+                
+                current = current.find_next_sibling()
+                
+                # Limit to prevent extracting too much
+                if len(responsibilities) >= 15:
+                    break
+            
+            # If we found responsibilities, stop looking
+            if responsibilities:
+                break
+    
+    # Join responsibilities with proper formatting
+    if responsibilities:
+        return "; ".join(responsibilities[:10])  # Limit to 10 items
+    
+    return ""
+
+def extract_from_table(html):
+    """Extract structured job details from HTML table if present."""
+    soup = BeautifulSoup(html, "html.parser")
+    extracted_data = {}
+    
+    # Find all tables - prioritize job details tables
+    tables = soup.find_all("table")
+    
+    for table in tables:
+        rows = table.find_all("tr")
+        
+        for row in rows:
+            cells = row.find_all("td")
+            if len(cells) == 2:
+                # Get left and right cell content
+                category = cells[0].get_text(strip=True).lower()
+                value = cells[1].get_text(strip=True)
+                
+                # Skip empty values
+                if not value or value == "-":
+                    continue
+                
+                # Comprehensive field mapping
+                # Company Name
+                if any(x in category for x in ["company name", "company", "organization"]):
+                    extracted_data["company"] = value
+                
+                # Job Title/Role
+                elif any(x in category for x in ["job title", "role", "position", "designation"]):
+                    if "title" not in extracted_data:
+                        extracted_data["title"] = value
+                
+                # Location
+                elif "location" in category:
+                    extracted_data["location"] = value
+                
+                # Experience
+                elif any(x in category for x in ["experience", "experience required", "years of experience"]):
+                    extracted_data["experience"] = value
+                
+                # Work Mode/Type
+                elif any(x in category for x in ["work mode", "work type", "internship type", "employment type"]):
+                    extracted_data["jobType"] = value
+                
+                # Salary/CTC/Stipend
+                elif any(x in category for x in ["salary", "ctc", "package", "stipend", "compensation"]):
+                    extracted_data["salary"] = value
+                
+                # Qualification/Education/Eligibility
+                elif any(x in category for x in ["qualification", "eligibility", "education", "degree"]):
+                    if "requirements" not in extracted_data:
+                        extracted_data["requirements"] = value
+                    else:
+                        extracted_data["requirements"] += "; " + value
+                
+                # Skills (Technology Stack, Core Skills, etc.)
+                elif any(x in category for x in ["technology stack", "core skills", "skills required", "technical skills", "key skills", "required skills"]):
+                    if "preferredSkills" not in extracted_data:
+                        extracted_data["preferredSkills"] = value
+                    else:
+                        extracted_data["preferredSkills"] += "; " + value
+                
+                # Department
+                elif "department" in category:
+                    if "description" not in extracted_data:
+                        extracted_data["description"] = f"Department: {value}"
+                    else:
+                        extracted_data["description"] += f" | Department: {value}"
+                
+                # Reporting To
+                elif "reporting to" in category or "reports to" in category:
+                    if "description" not in extracted_data:
+                        extracted_data["description"] = f"Reporting To: {value}"
+                    else:
+                        extracted_data["description"] += f" | Reporting To: {value}"
+                
+                # Shift Timings
+                elif "shift" in category or "timings" in category:
+                    if "description" not in extracted_data:
+                        extracted_data["description"] = f"Shift: {value}"
+                    else:
+                        extracted_data["description"] += f" | Shift: {value}"
+                
+                # Domain
+                elif "domain" in category:
+                    if "description" not in extracted_data:
+                        extracted_data["description"] = f"Domain: {value}"
+                    else:
+                        extracted_data["description"] += f" | Domain: {value}"
+                
+                # Responsibility Area/Description (from Roles and Responsibilities table)
+                elif "responsibility area" in category or "description" in category:
+                    if "responsibilities" not in extracted_data:
+                        extracted_data["responsibilities"] = value
+                    else:
+                        extracted_data["responsibilities"] += "; " + value
+    
+    return extracted_data
+
 def extract_job_details_with_ai(title, content_html, default_link):
     soup = BeautifulSoup(content_html, "html.parser")
     clean_text = soup.get_text(separator="\n").strip()
-    clean_text_short = clean_text[:1500]  # Limit to save tokens
+    clean_text_for_ai = clean_text[:10000]  # Increased to 10000 chars for comprehensive content analysis and quality extraction
+    
+    # First, extract from table
+    table_data = extract_from_table(content_html)
+    
+    if table_data:
+        print(f"\n📋 Extracted from HTML table ({len(table_data)} fields):")
+        for key, value in table_data.items():
+            print(f"   ✓ {key}: {value[:80] if len(str(value)) > 80 else value}")
+    
+    # Extract responsibilities from HTML structure
+    responsibilities = extract_responsibilities(content_html)
+    if responsibilities:
+        print(f"\n✓ Extracted responsibilities: {len(responsibilities)} characters")
+    
+    # Check if we have all required fields from table (skip AI if yes)
+    required_fields = ["company", "location", "experience", "jobType"]
+    has_all_required = all(field in table_data for field in required_fields)
+    
+    if has_all_required:
+        print(f"\n✅ All required fields found in table - Using table data directly")
+        
+        # Build job details from table data
+        experience_normalized = normalize_experience(table_data.get("experience", "Not Specified"))
+        
+        job_details = {
+            "company": table_data.get("company", "Not Specified"),
+            "location": table_data.get("location", "Not Specified"),
+            "experience": experience_normalized,
+            "jobType": table_data.get("jobType", "Not Specified"),
+            "salary": table_data.get("salary", "Not Disclosed"),
+            "description": table_data.get("description", clean_text[:500] if clean_text else "No description available"),
+            "requirements": table_data.get("requirements", "Not Specified"),
+            "preferredSkills": table_data.get("preferredSkills", "Not Specified"),
+            "responsibilities": table_data.get("responsibilities", responsibilities if responsibilities else "Not Specified"),
+            "notificationTitle": f"New Job at {table_data.get('company', 'Company')}",
+            "applyLink": extract_apply_link(content_html) or default_link
+        }
+        
+        # Log the table-extracted data
+        print("\n" + "="*70)
+        print("📋 TABLE-EXTRACTED JOB DATA (JSON):")
+        print("="*70)
+        print(json.dumps(job_details, indent=2, ensure_ascii=False))
+        print("="*70 + "\n")
+        
+        return job_details
+
+    # If not all fields in table, use AI to supplement
+    print(f"\n🤖 Using AI to supplement missing fields...")
 
     prompt = f"""
-Extract the job details into strict JSON only, no explanation. 
-Use these fields: company, location, experience, jobType, salary, description, requirements, preferredSkills, notificationTitle.
+You are a professional job content analyzer. Read the ENTIRE job posting carefully and extract accurate, well-formatted information.
+
+OUTPUT FORMAT: Return ONLY valid JSON with these exact fields: company, location, experience, jobType, salary, description, requirements, preferredSkills, notificationTitle
+
+CRITICAL INSTRUCTIONS:
+
+1. COMPANY NAME:
+   - Extract the exact company/organization name
+   - Use proper capitalization (e.g., "Google", "Microsoft", "TCS")
+   - If not mentioned, use "Not Specified"
+
+2. LOCATION:
+   - Include city/cities clearly (e.g., "Mumbai", "Bengaluru, Hyderabad")
+   - If multiple locations, separate with commas
+   - Include work mode if specified (e.g., "Mumbai (Remote)", "Pune (Hybrid)")
+
+3. EXPERIENCE:
+   - Extract experience requirement clearly
+   - Format consistently: "0-2 years", "2-5 years", "5-10 years", "10+ years"
+   - For freshers: use "0-2 years"
+   - For experienced: extract exact range mentioned
+
+4. JOB TYPE:
+   - Use standardized terms: "Full-Time", "Part-Time", "Internship", "Contract", "Freelance"
+   - Default to "Full-Time" if not clearly specified
+
+5. SALARY:
+   - Extract exact salary/CTC/stipend if mentioned (e.g., "₹5 LPA", "₹50,000/month", "₹15,000 - ₹20,000")
+   - If NOT mentioned anywhere, use exactly: "Not Disclosed"
+   - Include currency symbol if original has it
+
+6. DESCRIPTION:
+   - Write a comprehensive, well-structured description (250-400 words)
+   - Include: role overview, what the candidate will do, key aspects of the position
+   - Use proper grammar, sentence structure, and professional tone
+   - Break into clear paragraphs if needed
+   - Fix any grammar/spelling errors from source
+   - Make it engaging and informative
+
+7. REQUIREMENTS:
+   - List ALL educational and eligibility requirements clearly
+   - Format: "Bachelor's degree in Computer Science; Strong communication skills; Team player"
+   - Separate multiple requirements with semicolons
+   - Include mandatory qualifications, certifications, or prerequisites
+   - Fix grammar and make concise
+
+8. PREFERRED SKILLS:
+   - Extract ALL technical and professional skills mentioned
+   - Format clearly: "JavaScript, React, Node.js, Python, SQL, Git, Agile methodology"
+   - Separate skills with commas
+   - Prioritize technical skills first, then soft skills
+   - Use standard skill names (e.g., "React.js" not "react")
+
+9. NOTIFICATION TITLE:
+   - Create an engaging, concise title (max 60 characters)
+   - Format: "New Job at [Company Name]" or "Hiring [Role] at [Company]"
+   - Use proper capitalization
+
+QUALITY STANDARDS:
+✓ Correct all grammar and spelling errors
+✓ Use professional, clear language
+✓ Ensure proper punctuation and capitalization
+✓ Remove duplicates and redundant information
+✓ Maintain consistency across all fields
+✓ Cross-verify information accuracy
 
 Job Title: {title}
-Job Content: {clean_text_short}
-"""
+
+Job Content:
+{clean_text_for_ai}
+
+Return ONLY the JSON object, no explanations or markdown."""
 
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
         )
@@ -73,6 +427,9 @@ Job Content: {clean_text_short}
             response_text = re.sub(r'\n```$', '', response_text)
 
         job_details = json.loads(response_text)
+        
+        # Create a better description fallback from content
+        fallback_description = clean_text[:500] if clean_text else "No description available"
 
         defaults = {
             "company": "Not Specified",
@@ -80,33 +437,84 @@ Job Content: {clean_text_short}
             "experience": "Not Specified",
             "jobType": "Not Specified",
             "salary": "Not Disclosed",
-            "description": clean_text[:300],
+            "description": fallback_description,
             "requirements": "Not Specified",
             "preferredSkills": "Not Specified",
+            "responsibilities": responsibilities if responsibilities else "Not Specified",
             "notificationTitle": f"New Job at {job_details.get('company','Company')}"
         }
 
         for key, value in defaults.items():
             if key not in job_details or not job_details[key] or str(job_details[key]).strip() == "":
                 job_details[key] = value
+        
+        # Add extracted responsibilities if not in table (medium priority)
+        if responsibilities and "responsibilities" not in table_data:
+            job_details["responsibilities"] = responsibilities
+        
+        # Override with table data (highest priority)
+        for key, value in table_data.items():
+            if value and str(value).strip():
+                job_details[key] = value
+                print(f"✓ Using table data for {key}: {value[:80] if len(str(value)) > 80 else value}")
 
+        # Add apply link before logging
         job_details["applyLink"] = extract_apply_link(content_html) or default_link
+        
+        # Normalize experience to standard year ranges
+        experience = job_details.get("experience", "Not Specified")
+        normalized_exp = normalize_experience(experience)
+        if normalized_exp != experience:
+            job_details["experience"] = normalized_exp
+            print(f"✓ Normalized experience: '{experience}' → '{normalized_exp}'")
+        
+        # Log description extraction
+        description = job_details.get("description", "")
+        if description:
+            desc_length = len(description)
+            word_count = len(description.split())
+            print(f"✓ Extracted description: {desc_length} characters, {word_count} words")
+        
+        # Update notification title with correct company name
+        company_name = job_details.get("company", "Company")
+        if company_name != "Not Specified":
+            job_details["notificationTitle"] = f"New Job at {company_name}"
+        
+        # Log the AI-curated JSON data
+        print("\n" + "="*70)
+        print("🤖 AI-CURATED JOB DATA (JSON):")
+        print("="*70)
+        print(json.dumps(job_details, indent=2, ensure_ascii=False))
+        print("="*70 + "\n")
+
         return job_details
 
     except Exception as e:
         print(f"⚠ AI extraction failed: {e}")
-        return {
-            "company": "Not Specified",
-            "location": "Not Specified",
-            "experience": "Not Specified",
-            "jobType": "Not Specified",
-            "salary": "Not Disclosed",
-            "description": clean_text[:300],
-            "requirements": "Not Specified",
-            "preferredSkills": "Not Specified",
-            "notificationTitle": f"New Job Available",
-            "applyLink": default_link
+        
+        # Use table data as fallback
+        experience_raw = table_data.get("experience", "Not Specified")
+        experience_normalized = normalize_experience(experience_raw)
+        
+        # Use table description if available, otherwise extract from content
+        description = table_data.get("description", clean_text[:500] if clean_text else "No description available")
+        
+        fallback_data = {
+            "company": table_data.get("company", "Not Specified"),
+            "location": table_data.get("location", "Not Specified"),
+            "experience": experience_normalized,
+            "jobType": table_data.get("jobType", "Not Specified"),
+            "salary": table_data.get("salary", "Not Disclosed"),
+            "description": description,
+            "requirements": table_data.get("requirements", "Not Specified"),
+            "preferredSkills": table_data.get("preferredSkills", "Not Specified"),
+            "responsibilities": responsibilities if responsibilities else "Not Specified",
+            "notificationTitle": f"New Job at {table_data.get('company', 'Company')}",
+            "applyLink": extract_apply_link(content_html) or default_link
         }
+        
+        print(f"✓ Using table-extracted data as fallback")
+        return fallback_data
 
 def save_job(job):
     title_html = job.get("title", {}).get("rendered", "")
@@ -118,10 +526,42 @@ def save_job(job):
     # Skip if job already exists
     existing = list(db.collection("Directjobs").where("applyLink", "==", link).limit(1).stream())
     if existing:
-        return False
+        print(f"⏭️  Skipped: {clean_title[:60]}... (Already in database)")
+        return None
 
     ai_data = extract_job_details_with_ai(clean_title, content_html, link)
+    
+    # Validate company name - try to extract from URL if not found
+    company_name = ai_data.get("company", "").strip()
+    invalid_companies = ["not specified", "unknown", "company", "", "n/a", "na", "not available"]
+    
+    if not company_name or company_name.lower() in invalid_companies:
+        # Try to extract company name from apply link as fallback
+        apply_link = ai_data.get("applyLink", link)
+        company_from_url = extract_company_from_url(apply_link)
+        
+        if company_from_url:
+            ai_data["company"] = company_from_url
+            company_name = company_from_url
+            print(f"✓ Extracted company from URL: {company_name}")
+        else:
+            print(f"❌ Skipped: {clean_title[:60]}... (Company name not found)")
+            return None
+    
+    # Add jobFor classification
+    job_for = classify_job(clean_title, content_html)
+    ai_data["jobFor"] = job_for
+    
+    # Update notification title with correct company name
+    if company_name and company_name != "Not Specified":
+        ai_data["notificationTitle"] = f"New Job at {company_name}"
+    
     now = datetime.now(IST)
+    
+    # Generate unique job ID
+    global job_counter
+    unique_jobid = f"scrap{job_counter:02d}"
+    job_counter += 1
 
     job_data = {
         "active": True,
@@ -131,23 +571,53 @@ def save_job(job):
         "location": ai_data.get("location"),
         "experience": ai_data.get("experience"),
         "jobType": ai_data.get("jobType"),
-        "salary": ai_data.get("salary"),
+        "salary": ai_data.get("salary") or "Not Disclosed",
         "description": ai_data.get("description"),
         "requirements": ai_data.get("requirements"),
         "preferredSkills": ai_data.get("preferredSkills"),
+        "skill": ai_data.get("preferredSkills"),
+        "responsibilities": ai_data.get("responsibilities", "Not Specified"),
         "applyLink": ai_data.get("applyLink"),
-        "jobid": "",
+        "jobid": unique_jobid,
         "jobposterid": "",
         "source": "jobcode.in",
         "sourceFile": "scrape_jobcode_to_firestore.py",
-        "jobFor": classify_job(clean_title, content_html),
+        "jobFor": job_for,
         "createdAt": now,
         "postedAt": now,
     }
+    
+    # Log complete job data being saved to Firebase
+    print("\n" + "="*70)
+    print("📝 POSTING JOB TO FIREBASE:")
+    print("="*70)
+    print(json.dumps({k: str(v) if k in ["createdAt", "postedAt"] else v for k, v in job_data.items()}, indent=2, ensure_ascii=False))
+    print("="*70 + "\n")
 
+    # Post to Firebase
     db.collection("Directjobs").add(job_data)
-    print(f"✓ Added Job: {clean_title}")
+    print(f"✓ Added to Firebase: {clean_title} (ID: {unique_jobid})")
     return ai_data.get("notificationTitle")
+
+def get_highest_scrap_id():
+    """Get the highest scrap ID from existing jobs in Firebase"""
+    try:
+        jobs = db.collection("Directjobs").where("jobid", ">=", "scrap").where("jobid", "<", "scraq").stream()
+        max_id = 0
+        for job in jobs:
+            job_data = job.to_dict()
+            jobid = job_data.get("jobid", "")
+            if jobid.startswith("scrap"):
+                try:
+                    num = int(jobid.replace("scrap", ""))
+                    if num > max_id:
+                        max_id = num
+                except ValueError:
+                    continue
+        return max_id
+    except Exception as e:
+        print(f"⚠ Error getting highest scrap ID: {e}")
+        return 0
 
 def send_notification(title):
     tokens = []
@@ -195,11 +665,27 @@ def send_notification(title):
 
 # ------------------ MAIN ------------------
 if __name__ == "__main__":
+    # Get the highest existing scrap ID
+    print("🔍 Checking existing scrap IDs in Firebase...")
+    highest_id = get_highest_scrap_id()
+    job_counter = highest_id + 1
+    print(f"✓ Starting from scrap{job_counter:02d}\n")
+    
     page = 1
     latest_notification_title = None
+    jobs_processed = 0
+    jobs_skipped = 0
+    jobs_added = 0
+    jobs_no_company = 0
 
     today = datetime.now(IST).date()
-    yesterday = today - timedelta(days=1)
+    
+    print("\n" + "="*70)
+    print("🚀 SCRAPING LATEST JOBS FROM JOBCODE.IN")
+    print(f"   Date: {today}")
+    print("   ✅ New jobs will be posted to Firebase")
+    print("   📢 Notifications will be sent")
+    print("="*70 + "\n")
 
     while True:
         jobs = fetch_jobs_page(page)
@@ -207,23 +693,54 @@ if __name__ == "__main__":
             break
 
         for job in jobs:
-            # Only process jobs posted today or yesterday
+            # Process latest jobs (today and yesterday to catch any missed)
             job_date_str = job.get("date")
             if job_date_str:
                 job_date = datetime.fromisoformat(job_date_str.replace("Z", "+00:00")).astimezone(IST).date()
-                if job_date not in [today, yesterday]:
+                
+                # Only process today's jobs (skip older ones)
+                days_old = (today - job_date).days
+                if days_old > 1:  # Skip jobs older than yesterday
                     continue
 
             notification_title = save_job(job)
             if notification_title:
                 latest_notification_title = notification_title
-
+                jobs_added += 1
+            else:
+                jobs_no_company += 1
+            
+            jobs_processed += 1
             time.sleep(0.5)  # prevent overload
 
         page += 1
 
+    # Send notification for the latest added job
     if latest_notification_title:
-        send_notification(latest_notification_title)
-        print("Notification sent for the latest added job.")
+        try:
+            send_notification(latest_notification_title)
+            print("\n✅ Notification sent for the latest job.")
+        except Exception as e:
+            print(f"\n⚠ Notification failed: {e}")
     else:
-        print("No new jobs added. No notifications sent.")
+        print("\n⏭️  No new jobs added. No notifications sent.")
+    
+    print("\n" + "="*70)
+    if jobs_added == 0:
+        print("❌ NO NEW JOBS FOUND")
+        print("="*70)
+        print(f"   Jobs Checked: {jobs_processed}")
+        print(f"   Jobs Skipped (No Company Name): {jobs_no_company}")
+        print(f"   Jobs Added to Firebase: {jobs_added}")
+        print("="*70)
+        print("ℹ️  All jobs are already in the database or were filtered out")
+        print("="*70 + "\n")
+    else:
+        print("📊 PROCESSING SUMMARY")
+        print("="*70)
+        print(f"   Jobs Skipped (No Company Name): {jobs_no_company}")
+        print(f"   Jobs Added to Firebase: {jobs_added}")
+        print(f"   Total Jobs Processed: {jobs_processed}")
+        print("="*70)
+        print("✅ Jobs successfully posted to Firebase")
+        print("="*70 + "\n")

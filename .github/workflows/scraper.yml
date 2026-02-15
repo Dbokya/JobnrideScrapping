@@ -24,7 +24,8 @@ jobs:
 
       - name: Create Firebase Key
         run: |
-          echo '${{ secrets.FIREBASE_KEY }}' > serviceAccountKey.json
+          mkdir -p serviceaccount
+          echo '${{ secrets.FIREBASE_KEY }}' > serviceaccount/jobnride-97d77-firebase-adminsdk-fbsvc-20ce6e6129.json
 
       - name: Run scraper and update Firestore
         env:
