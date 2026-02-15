@@ -2,133 +2,159 @@ import requests
 import firebase_admin
 from firebase_admin import credentials, firestore, messaging
 from datetime import datetime
-import pytz
-import json
-from bs4 import BeautifulSoup
+import uuid
 
-# =====================================
-# 🔐 Initialize Firebase
-# =====================================
-
+# ========== FIREBASE INIT ==========
 cred = credentials.Certificate("serviceAccountKey.json")
 firebase_admin.initialize_app(cred)
 
 db = firestore.client()
 
-# =====================================
-# 🌏 Timezone (IST)
-# =====================================
+API_URL = "https://your-api-endpoint.com"
+DIRECT_COLLECTION = "Directjobs"
 
-ist = pytz.timezone("Asia/Kolkata")
-now = datetime.now(ist)
+# ========== FETCH LATEST JOB ==========
+def fetch_latest_job():
+    print("Fetching latest job...")
+    response = requests.get(API_URL)
+    data = response.json()
 
-# =====================================
-# 🔎 Fetch ONLY 1 Latest Job
-# =====================================
+    if not data:
+        print("No jobs found")
+        return None
 
-API_URL = "https://jobcode.in/wp-json/wp/v2/posts"
+    return data[0]
 
-print("Fetching latest job from Jobcode API...")
+# ========== CLEAN JOB ==========
+def normalize_job(job):
+    cleaned = {
+        "jobId": str(uuid.uuid4()),
+        "title": job.get("title", "").strip(),
+        "company": job.get("company", "").strip(),
+        "location": job.get("location", "").strip(),
+        "description": job.get("description", "").strip(),
+        "applyLink": job.get("applyLink", ""),
+        "createdAt": datetime.utcnow(),
+        "source": "direct"
+    }
 
-response = requests.get(
-    API_URL,
-    params={
-        "per_page": 1,
-        "page": 1
-    },
-    timeout=30
-)
+    print("\nFields being added:")
+    for k, v in cleaned.items():
+        print(f"{k}: {v}")
 
-if response.status_code != 200:
-    print("❌ Failed to fetch jobs:", response.status_code)
-    exit()
+    return cleaned
 
-data = response.json()
+# ========== SAVE JOB ==========
+def save_job(job_data):
+    db.collection(DIRECT_COLLECTION).document(job_data["jobId"]).set(job_data)
+    print("✅ Job saved in Directjobs")
 
-if not data:
-    print("❌ No jobs found")
-    exit()
+# ========== GET ALL TOKENS ==========
+def get_all_tokens():
+    print("\nFetching device tokens...")
+    tokens = []
+    android_count = 0
+    ios_count = 0
 
-job = data[0]
+    users = db.collection("users").stream()
 
-slug = job.get("slug", "")
-title = job.get("title", {}).get("rendered", "")
-content = job.get("content", {}).get("rendered", "")
-description = job.get("excerpt", {}).get("rendered", "")
+    for user in users:
+        token_docs = db.collection("users") \
+            .document(user.id) \
+            .collection("deviceTokens") \
+            .stream()
 
-# =====================================
-# 🔗 Extract REAL Apply Link
-# =====================================
+        for token_doc in token_docs:
+            token_data = token_doc.to_dict()
 
-soup = BeautifulSoup(content, "html.parser")
+            token = token_data.get("token")
+            platform = token_data.get("platform")
 
-apply_link = ""
+            if token:
+                tokens.append(token)
 
-for a in soup.find_all("a", href=True):
-    if "apply" in a.get_text(strip=True).lower():
-        apply_link = a["href"]
-        break
+                if platform == "android":
+                    android_count += 1
+                elif platform == "ios":
+                    ios_count += 1
 
-if not apply_link:
-    apply_link = f"https://jobcode.in/{slug}/"
+    print(f"Total Tokens: {len(tokens)}")
+    print(f"Android: {android_count}")
+    print(f"iOS: {ios_count}")
 
-# =====================================
-# 📦 Prepare Firestore Data
-# =====================================
+    return tokens
 
-job_data = {
-    "active": True,
-    "applyLink": apply_link,
-    "approved": True,
-    "company": "",
-    "contactEmail": "",
-    "createdAt": now,
-    "description": description,
-    "experience": "",
-    "jobType": "Full-time",
-    "jobid": "",
-    "jobposterid": "",
-    "location": "",
-    "postedAt": now,
-    "preferredSkills": "",
-    "requirements": content,
-    "salary": "",
-    "skill": "",
-    "source": "Jobcode",
-    "sourceFile": "",
-    "title": title
-}
+# ========== SEND NOTIFICATION ==========
+def send_notification(tokens, job):
+    if not tokens:
+        print("No tokens found.")
+        return
 
-print("\n==============================")
-print("🔥 JOB DETAILS TO BE ADDED:")
-print("==============================")
-print(json.dumps({k: str(v) for k, v in job_data.items()}, indent=2))
+    print("\nSending notification...")
 
-# =====================================
-# 🔍 Check If Already Exists
-# =====================================
-
-doc_ref = db.collection("Directjobs").document(slug)
-
-if doc_ref.get().exists:
-    print("\n⚠ Job already exists in Firestore. Skipping insert.")
-else:
-    doc_ref.set(job_data)
-    print("\n✅ Job inserted into Directjobs collection.")
-
-    # =====================================
-    # 🔔 Send FCM Notification
-    # =====================================
-
-    message = messaging.Message(
+    message = messaging.MulticastMessage(
+        tokens=tokens,
         notification=messaging.Notification(
-            title="🚀 New Job Posted",
-            body=title,
+            title="🚀 New Job Posted!",
+            body=f"{job['title']} at {job['company']}"
         ),
-        topic="all_users",
+        data={
+            "type": "job",
+            "jobId": job["jobId"],
+            "click_action": "FLUTTER_NOTIFICATION_CLICK"
+        },
+        android=messaging.AndroidConfig(
+            priority="high",
+        ),
+        apns=messaging.APNSConfig(
+            headers={
+                "apns-priority": "10"
+            }
+        )
     )
 
-    response = messaging.send(message)
-    print("\n📢 Notification sent successfully:", response)
+    response = messaging.send_multicast(message)
 
-print("\n✅ Test script completed.")
+    print("Success:", response.success_count)
+    print("Failure:", response.failure_count)
+
+    # Remove invalid tokens automatically
+    if response.failure_count > 0:
+        print("Cleaning invalid tokens...")
+
+        for idx, resp in enumerate(response.responses):
+            if not resp.success:
+                invalid_token = tokens[idx]
+                remove_invalid_token(invalid_token)
+
+# ========== REMOVE INVALID TOKEN ==========
+def remove_invalid_token(bad_token):
+    users = db.collection("users").stream()
+
+    for user in users:
+        token_docs = db.collection("users") \
+            .document(user.id) \
+            .collection("deviceTokens") \
+            .where("token", "==", bad_token) \
+            .stream()
+
+        for doc in token_docs:
+            doc.reference.delete()
+            print(f"Removed invalid token: {bad_token}")
+
+# ========== MAIN ==========
+def main():
+    job = fetch_latest_job()
+    if not job:
+        return
+
+    cleaned_job = normalize_job(job)
+    save_job(cleaned_job)
+
+    tokens = get_all_tokens()
+    send_notification(tokens, cleaned_job)
+
+    print("\n🎉 Script Finished Successfully")
+
+if __name__ == "__main__":
+    main()
