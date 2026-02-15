@@ -523,11 +523,17 @@ def save_job(job):
 
     clean_title = BeautifulSoup(title_html, "html.parser").get_text()
 
-    # Skip if job already exists
-    existing = list(db.collection("Directjobs").where("applyLink", "==", link).limit(1).stream())
-    if existing:
-        print(f"⏭️  Skipped: {clean_title[:60]}... (Already in database)")
-        return None
+    # Check for duplicates by applyLink (primary check)
+    existing_by_link = list(db.collection("Directjobs").where("applyLink", "==", link).limit(1).stream())
+    if existing_by_link:
+        print(f"⏭️  Skipped: {clean_title[:60]}... (Already exists - same apply link)")
+        return "DUPLICATE"
+    
+    # Check for duplicates by title (secondary check for same job with different link)
+    existing_by_title = list(db.collection("Directjobs").where("title", "==", clean_title).limit(1).stream())
+    if existing_by_title:
+        print(f"⏭️  Skipped: {clean_title[:60]}... (Already exists - same title)")
+        return "DUPLICATE"
 
     ai_data = extract_job_details_with_ai(clean_title, content_html, link)
     
@@ -675,6 +681,7 @@ if __name__ == "__main__":
     latest_notification_title = None
     jobs_processed = 0
     jobs_skipped = 0
+    jobs_duplicates = 0
     jobs_added = 0
     jobs_no_company = 0
 
@@ -704,7 +711,9 @@ if __name__ == "__main__":
                     continue
 
             notification_title = save_job(job)
-            if notification_title:
+            if notification_title == "DUPLICATE":
+                jobs_duplicates += 1
+            elif notification_title:
                 latest_notification_title = notification_title
                 jobs_added += 1
             else:
@@ -730,6 +739,7 @@ if __name__ == "__main__":
         print("❌ NO NEW JOBS FOUND")
         print("="*70)
         print(f"   Jobs Checked: {jobs_processed}")
+        print(f"   Jobs Skipped (Duplicates): {jobs_duplicates}")
         print(f"   Jobs Skipped (No Company Name): {jobs_no_company}")
         print(f"   Jobs Added to Firebase: {jobs_added}")
         print("="*70)
@@ -738,6 +748,7 @@ if __name__ == "__main__":
     else:
         print("📊 PROCESSING SUMMARY")
         print("="*70)
+        print(f"   Jobs Skipped (Duplicates): {jobs_duplicates}")
         print(f"   Jobs Skipped (No Company Name): {jobs_no_company}")
         print(f"   Jobs Added to Firebase: {jobs_added}")
         print(f"   Total Jobs Processed: {jobs_processed}")
