@@ -26,4 +26,6 @@ jobs:
           echo '${{ secrets.FIREBASE_KEY }}' > serviceAccountKey.json
 
       - name: Run scraper
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python scrape_jobcode_to_firestore.py

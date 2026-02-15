@@ -6,94 +6,65 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 import firebase_admin
 from firebase_admin import credentials, firestore, messaging
-import google.generativeai as genai
+from google import genai
 import os
 
 # ------------------ FIREBASE INIT ------------------
-
 cred = credentials.Certificate("serviceAccountKey.json")
 firebase_admin.initialize_app(cred)
-
 db = firestore.client()
 
 # ------------------ AI INIT ------------------
-
-# Configure Gemini AI from environment variable (GitHub Secret)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY environment variable is not set. Please configure it in GitHub Secrets.")
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+client = genai.Client(api_key=GEMINI_API_KEY)
+MODEL_ID = "gemini-2.0-flash-exp"
 
 # ------------------ CONFIG ------------------
-
 BASE_API = "https://jobcode.in/wp-json/wp/v2/posts?per_page=100&page="
-
 IST = pytz.timezone("Asia/Kolkata")
 
 # ------------------ FETCH ALL JOBS ------------------
-
 def fetch_all_jobs():
     jobs = []
     page = 1
-
     while True:
         print(f"Fetching page {page}...")
         response = requests.get(BASE_API + str(page))
-
         if response.status_code != 200:
             break
-
         data = response.json()
-
         if not data:
             break
-
         jobs.extend(data)
         page += 1
-
     print(f"Total jobs fetched: {len(jobs)}")
     return jobs
 
-
 # ------------------ CLASSIFY JOB ------------------
-
 def classify_job(title, content):
     text = f"{title} {content}".lower()
-
     if re.search(r"\bintern(ship)?\b", text):
         return "intern"
-
     if re.search(r"\b(fresher|entry level|junior)\b", text):
         return "fresher"
-
     return "experienced"
 
-
 # ------------------ EXTRACT APPLY LINK ------------------
-
 def extract_apply_link(html):
     soup = BeautifulSoup(html, "html.parser")
     apply_button = soup.find("a", string=re.compile("Apply", re.IGNORECASE))
-
     if apply_button and apply_button.get("href"):
         return apply_button["href"]
-
     return ""
 
-
 # ------------------ EXTRACT JOB DETAILS WITH AI ------------------
-
 def extract_job_details_with_ai(title, content_html, default_link):
-    """
-    Uses Gemini AI to extract structured job information from the job posting.
-    """
-    # Clean HTML content
     soup = BeautifulSoup(content_html, "html.parser")
     clean_text = soup.get_text(separator="\n").strip()
     
-    # Create a comprehensive prompt for the AI
     prompt = f"""
 Analyze the following job posting and extract information in a strict JSON format. 
 Return ONLY a valid JSON object with these exact fields (no markdown, no code blocks, just JSON):
@@ -124,173 +95,105 @@ Return ONLY the JSON object, nothing else.
 """
 
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(model=MODEL_ID, contents=prompt)
         response_text = response.text.strip()
-        
-        # Remove markdown code blocks if present
         if response_text.startswith("```"):
             response_text = re.sub(r'^```json?\n', '', response_text)
             response_text = re.sub(r'\n```$', '', response_text)
-            response_text = response_text.strip()
-        
-        # Parse the JSON response
         job_details = json.loads(response_text)
-        
-        # Ensure all required fields exist with defaults
-        defaults = {
+    except Exception:
+        job_details = {
             "company": "Not Specified",
             "location": "Not Specified",
             "experience": "Not Specified",
             "jobType": "Not Specified",
             "salary": "Not Disclosed",
-            "description": clean_text[:500] if clean_text else "No description available",
+            "description": clean_text[:500],
             "requirements": "Not Specified",
             "preferredSkills": "Not Specified",
-            "notificationTitle": f"New Job at {job_details.get('company', 'Company')}"
+            "notificationTitle": f"New Job at Company"
         }
-        
-        # Merge with defaults
-        for key, default_value in defaults.items():
-            if key not in job_details or not job_details[key] or job_details[key].strip() == "":
-                job_details[key] = default_value
-        
-        # Extract or verify apply link
-        apply_link = extract_apply_link(content_html)
-        if not apply_link:
-            apply_link = default_link
-        
-        job_details["applyLink"] = apply_link
-        
-        print(f"✓ AI extracted: {job_details.get('company', 'Unknown')} - {job_details.get('location', 'Unknown')}")
-        
-        return job_details
-        
-    except json.JSONDecodeError as e:
-        print(f"⚠ JSON parsing error: {e}")
-        print(f"Response was: {response_text[:200]}")
-        return get_default_job_details(title, clean_text, default_link)
-    except Exception as e:
-        print(f"⚠ AI extraction error: {e}")
-        return get_default_job_details(title, clean_text, default_link)
 
+    apply_link = extract_apply_link(content_html)
+    if not apply_link:
+        apply_link = default_link
+    job_details["applyLink"] = apply_link
 
-def get_default_job_details(title, clean_text, link):
-    """
-    Fallback function when AI extraction fails.
-    """
-    return {
-        "company": "Not Specified",
-        "location": "Not Specified",
-        "experience": "Not Specified",
-        "jobType": "Not Specified",
-        "salary": "Not Disclosed",
-        "description": clean_text[:500] if clean_text else "No description available",
-        "requirements": "Not Specified",
-        "preferredSkills": "Not Specified",
-        "notificationTitle": f"New Job Available",
-        "applyLink": link
-    }
-
+    return job_details
 
 # ------------------ SEND NOTIFICATION ------------------
-
 def send_notification(notification_title):
     print("Sending notification...")
-
     tokens = []
-
     users = db.collection("users").stream()
-
     for user in users:
-        token_docs = (
-            db.collection("users")
-            .document(user.id)
-            .collection("deviceTokens")
-            .stream()
-        )
-
+        token_docs = db.collection("users").document(user.id).collection("deviceTokens").stream()
         for token_doc in token_docs:
             token = token_doc.to_dict().get("token")
             if token:
                 tokens.append(token)
-
     if not tokens:
         print("No device tokens found.")
         return
 
-    # Create notification with sound for both Android and iOS
-    message = messaging.MulticastMessage(
-        notification=messaging.Notification(
-            title="🚀 New Job Alert!",
-            body=notification_title,
-        ),
-        android=messaging.AndroidConfig(
-            priority='high',
-            notification=messaging.AndroidNotification(
-                sound='default',
-                channel_id='job_alerts',
+    print(f"Total tokens found: {len(tokens)}")
+    BATCH_SIZE = 500
+    success_total = 0
+    failure_total = 0
+
+    for i in range(0, len(tokens), BATCH_SIZE):
+        batch = tokens[i:i + BATCH_SIZE]
+        message = messaging.MulticastMessage(
+            notification=messaging.Notification(
+                title="🚀 New Job Alert!",
+                body=notification_title,
+            ),
+            android=messaging.AndroidConfig(
                 priority='high',
-            )
-        ),
-        apns=messaging.APNSConfig(
-            payload=messaging.APNSPayload(
-                aps=messaging.Aps(
+                notification=messaging.AndroidNotification(
                     sound='default',
-                    badge=1,
-                    content_available=True,
+                    channel_id='job_alerts',
                 )
-            )
-        ),
-        tokens=tokens,
-    )
+            ),
+            apns=messaging.APNSConfig(
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(
+                        sound='default',
+                        badge=1,
+                        content_available=True,
+                    )
+                )
+            ),
+            tokens=batch,
+        )
+        response = messaging.send_each_for_multicast(message)
+        success_total += response.success_count
+        failure_total += response.failure_count
 
-    response = messaging.send_each_for_multicast(message)
-
-    print("✓ Notification sent with sound")
-    print("  Success:", response.success_count)
-    print("  Failed:", response.failure_count)
-
+    print(f"Notification sending completed. Success: {success_total}, Failed: {failure_total}")
 
 # ------------------ SAVE JOBS ------------------
-
 def save_jobs(jobs):
     first_run = True
-    new_jobs_added = 0
-
-    # If collection empty → first run
     existing_docs = list(db.collection("Directjobs").limit(1).stream())
     if existing_docs:
         first_run = False
 
-    # TESTING: Process only 1 job
-    jobs = jobs[:1]
-    print(f"\n⚠ TEST MODE: Processing only 1 job\n")
+    newly_added_jobs = []
 
     for job in jobs:
         title = job.get("title", {}).get("rendered", "")
         content = job.get("content", {}).get("rendered", "")
         link = job.get("link", "")
 
-        # Clean title
         clean_title = BeautifulSoup(title, "html.parser").get_text()
 
-        # Check if already exists using applyLink
-        existing = (
-            db.collection("Directjobs")
-            .where("applyLink", "==", link)
-            .limit(1)
-            .stream()
-        )
-
+        existing = db.collection("Directjobs").where("applyLink", "==", link).limit(1).stream()
         if list(existing):
-            continue  # skip existing jobs
+            continue
 
-        # Extract job details using AI
-        print(f"\nProcessing: {clean_title}")
         ai_extracted = extract_job_details_with_ai(clean_title, content, link)
-
         now = datetime.now(IST)
-
         job_data = {
             "active": True,
             "approved": True,
@@ -312,31 +215,23 @@ def save_jobs(jobs):
             "createdAt": now,
             "postedAt": now,
         }
-        
-        notification_title = ai_extracted.get("notificationTitle", f"New Job at {job_data['company']}")
-
-        print(f"✓ Adding Job: {job_data['title']} at {job_data['company']}")
 
         db.collection("Directjobs").add(job_data)
+        newly_added_jobs.append(job_data)
 
-        new_jobs_added += 1
+    # Send notification for only the first newly added job (most recent)
+    if newly_added_jobs and not first_run:
+        latest_job = newly_added_jobs[-1]  # last added job
+        notification_title = latest_job.get("notificationTitle", f"New Job at {latest_job['company']}")
+        send_notification(notification_title)
 
-        # Send notification ONLY if NOT first run
-        if not first_run:
-            send_notification(notification_title)
-
-    print(f"\n{'='*50}")
-    print(f"Summary: {new_jobs_added} new jobs added")
-    print(f"{'='*50}")
-
+    print(f"Summary: {len(newly_added_jobs)} new jobs added")
     if first_run:
         print("First run completed. No notifications sent.")
-    elif new_jobs_added == 0:
+    elif len(newly_added_jobs) == 0:
         print("No new jobs found. No notifications sent.")
 
-
 # ------------------ MAIN ------------------
-
 if __name__ == "__main__":
     jobs = fetch_all_jobs()
     save_jobs(jobs)

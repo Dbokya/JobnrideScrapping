@@ -2,4 +2,4 @@ requests
 firebase-admin
 beautifulsoup4
 pytz
-google-generativeai
+google-genai
