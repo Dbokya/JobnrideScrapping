@@ -2,159 +2,240 @@ import requests
 import firebase_admin
 from firebase_admin import credentials, firestore, messaging
 from datetime import datetime
-import uuid
+import pytz
+import re
+import os
+import json
 
-# ========== FIREBASE INIT ==========
-cred = credentials.Certificate("serviceAccountKey.json")
-firebase_admin.initialize_app(cred)
+# ===============================
+# 🔥 FIREBASE INITIALIZATION
+# ===============================
+
+if not firebase_admin._apps:
+    cred = credentials.Certificate("serviceAccountKey.json")
+    firebase_admin.initialize_app(cred)
 
 db = firestore.client()
 
-API_URL = "https://your-api-endpoint.com"
-DIRECT_COLLECTION = "Directjobs"
+# ===============================
+# 🔥 CONFIG
+# ===============================
 
-# ========== FETCH LATEST JOB ==========
-def fetch_latest_job():
-    print("Fetching latest job...")
-    response = requests.get(API_URL)
-    data = response.json()
+API_BASE_URL = "https://jobcode.in/wp-json/wp/v2/posts?per_page=100&page="
+IST = pytz.timezone("Asia/Kolkata")
 
-    if not data:
-        print("No jobs found")
-        return None
 
-    return data[0]
+# ===============================
+# 🔥 JOB CLASSIFIER
+# ===============================
 
-# ========== CLEAN JOB ==========
-def normalize_job(job):
-    cleaned = {
-        "jobId": str(uuid.uuid4()),
-        "title": job.get("title", "").strip(),
-        "company": job.get("company", "").strip(),
-        "location": job.get("location", "").strip(),
-        "description": job.get("description", "").strip(),
-        "applyLink": job.get("applyLink", ""),
-        "createdAt": datetime.utcnow(),
-        "source": "direct"
-    }
+def classify_job(job):
+    title = (job.get("title", "") or "").lower()
+    description = (job.get("description", "") or "").lower()
+    experience = (job.get("experience", "") or "").lower()
 
-    print("\nFields being added:")
-    for k, v in cleaned.items():
-        print(f"{k}: {v}")
+    combined = f"{title} {description} {experience}"
 
-    return cleaned
+    if "intern" in combined:
+        return "intern"
 
-# ========== SAVE JOB ==========
-def save_job(job_data):
-    db.collection(DIRECT_COLLECTION).document(job_data["jobId"]).set(job_data)
-    print("✅ Job saved in Directjobs")
+    if (
+        "fresher" in combined
+        or "0-1" in combined
+        or "0-2" in combined
+        or "entry level" in combined
+        or "junior" in combined
+    ):
+        return "fresher"
 
-# ========== GET ALL TOKENS ==========
-def get_all_tokens():
-    print("\nFetching device tokens...")
+    # Try numeric detection
+    match = re.search(r'(\d+)\s*[-–]\s*(\d+)', experience)
+    if match:
+        start = int(match.group(1))
+        if start <= 1:
+            return "fresher"
+
+    return "experienced"
+
+
+# ===============================
+# 🔥 FETCH JOBS FROM API
+# ===============================
+
+def fetch_jobs():
+    all_jobs = []
+    page = 1
+
+    while True:
+        print(f"Fetching page {page}...")
+        response = requests.get(API_BASE_URL + str(page))
+
+        if response.status_code != 200:
+            break
+
+        jobs = response.json()
+
+        if not jobs:
+            break
+
+        all_jobs.extend(jobs)
+        page += 1
+
+    print(f"Total jobs fetched: {len(all_jobs)}")
+    return all_jobs
+
+
+# ===============================
+# 🔥 CHECK DUPLICATE
+# ===============================
+
+def job_exists(title, company):
+    query = (
+        db.collection("Directjobs")
+        .where("title", "==", title)
+        .where("company", "==", company)
+        .limit(1)
+        .stream()
+    )
+    return any(query)
+
+
+# ===============================
+# 🔥 SEND FCM NOTIFICATION
+# ===============================
+
+def send_notification(title, company):
+    print("Sending notification...")
+
     tokens = []
-    android_count = 0
-    ios_count = 0
 
     users = db.collection("users").stream()
-
     for user in users:
-        token_docs = db.collection("users") \
-            .document(user.id) \
-            .collection("deviceTokens") \
+        device_tokens = (
+            db.collection("users")
+            .document(user.id)
+            .collection("deviceTokens")
             .stream()
+        )
 
-        for token_doc in token_docs:
-            token_data = token_doc.to_dict()
-
-            token = token_data.get("token")
-            platform = token_data.get("platform")
-
+        for token_doc in device_tokens:
+            token = token_doc.to_dict().get("token")
             if token:
                 tokens.append(token)
 
-                if platform == "android":
-                    android_count += 1
-                elif platform == "ios":
-                    ios_count += 1
-
-    print(f"Total Tokens: {len(tokens)}")
-    print(f"Android: {android_count}")
-    print(f"iOS: {ios_count}")
-
-    return tokens
-
-# ========== SEND NOTIFICATION ==========
-def send_notification(tokens, job):
     if not tokens:
         print("No tokens found.")
         return
 
-    print("\nSending notification...")
-
     message = messaging.MulticastMessage(
-        tokens=tokens,
         notification=messaging.Notification(
             title="🚀 New Job Posted!",
-            body=f"{job['title']} at {job['company']}"
+            body=f"{title} at {company}"
         ),
-        data={
-            "type": "job",
-            "jobId": job["jobId"],
-            "click_action": "FLUTTER_NOTIFICATION_CLICK"
-        },
-        android=messaging.AndroidConfig(
-            priority="high",
-        ),
-        apns=messaging.APNSConfig(
-            headers={
-                "apns-priority": "10"
-            }
-        )
+        tokens=tokens,
     )
 
     response = messaging.send_multicast(message)
+    print(f"Notifications sent: {response.success_count}")
 
-    print("Success:", response.success_count)
-    print("Failure:", response.failure_count)
 
-    # Remove invalid tokens automatically
-    if response.failure_count > 0:
-        print("Cleaning invalid tokens...")
+# ===============================
+# 🔥 SAVE JOBS TO FIRESTORE
+# ===============================
 
-        for idx, resp in enumerate(response.responses):
-            if not resp.success:
-                invalid_token = tokens[idx]
-                remove_invalid_token(invalid_token)
+def save_jobs(jobs):
+    new_jobs_count = 0
 
-# ========== REMOVE INVALID TOKEN ==========
-def remove_invalid_token(bad_token):
-    users = db.collection("users").stream()
+    for job in jobs:
 
-    for user in users:
-        token_docs = db.collection("users") \
-            .document(user.id) \
-            .collection("deviceTokens") \
-            .where("token", "==", bad_token) \
-            .stream()
+        title = job.get("title", {}).get("rendered", "")
+        link = job.get("link", "")
+        content = job.get("content", {}).get("rendered", "")
 
-        for doc in token_docs:
-            doc.reference.delete()
-            print(f"Removed invalid token: {bad_token}")
+        if not title:
+            continue
 
-# ========== MAIN ==========
-def main():
-    job = fetch_latest_job()
-    if not job:
-        return
+        company = extract_company(content)
+        location = extract_location(content)
+        experience = extract_experience(content)
+        job_type = extract_job_type(content)
 
-    cleaned_job = normalize_job(job)
-    save_job(cleaned_job)
+        if job_exists(title, company):
+            continue
 
-    tokens = get_all_tokens()
-    send_notification(tokens, cleaned_job)
+        job_for = classify_job({
+            "title": title,
+            "description": content,
+            "experience": experience
+        })
 
-    print("\n🎉 Script Finished Successfully")
+        now = datetime.now(IST)
+
+        job_data = {
+            "active": True,
+            "approved": True,
+            "title": title,
+            "company": company,
+            "location": location,
+            "experience": experience,
+            "jobType": job_type,
+            "salary": "",
+            "description": content,
+            "requirements": "",
+            "preferredSkills": "",
+            "applyLink": link,
+            "jobid": "",
+            "jobposterid": "",
+            "source": "",
+            "sourceFile": "",
+            "jobFor": job_for,
+            "createdAt": now,
+            "postedAt": now,
+        }
+
+        print("Adding Job:")
+        print(json.dumps(job_data, indent=2, default=str))
+
+        db.collection("Directjobs").add(job_data)
+
+        send_notification(title, company)
+
+        new_jobs_count += 1
+
+        # Only add ONE job for testing
+        break
+
+    print(f"New jobs added: {new_jobs_count}")
+
+
+# ===============================
+# 🔥 EXTRACTION HELPERS
+# ===============================
+
+def extract_company(content):
+    match = re.search(r'Company:\s*(.*?)<', content)
+    return match.group(1).strip() if match else "Unknown"
+
+
+def extract_location(content):
+    match = re.search(r'Location:\s*(.*?)<', content)
+    return match.group(1).strip() if match else ""
+
+
+def extract_experience(content):
+    match = re.search(r'Experience:\s*(.*?)<', content)
+    return match.group(1).strip() if match else ""
+
+
+def extract_job_type(content):
+    match = re.search(r'Job Type:\s*(.*?)<', content)
+    return match.group(1).strip() if match else ""
+
+
+# ===============================
+# 🔥 MAIN
+# ===============================
 
 if __name__ == "__main__":
-    main()
+    jobs = fetch_jobs()
+    save_jobs(jobs)
