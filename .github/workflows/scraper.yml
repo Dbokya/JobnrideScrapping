@@ -2,7 +2,7 @@ name: Jobcode Scraper
 
 on:
   schedule:
-    - cron: '0 */2 * * *'   # Every 2 hours
+    - cron: "0 */2 * * *"
   workflow_dispatch:
 
 jobs:
@@ -11,17 +11,19 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Create Firebase Key
+        run: |
+          echo '${{ secrets.FIREBASE_KEY }}' > serviceAccountKey.json
+
       - name: Run scraper
-        env:
-          FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
         run: python scrape_jobcode_to_firestore.py
