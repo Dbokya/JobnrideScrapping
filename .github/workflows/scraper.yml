@@ -2,6 +2,7 @@ name: Jobcode Scraper
 
 on:
   schedule:
+    # Runs every 2 hours
     - cron: "0 */2 * * *"
   workflow_dispatch:
 
@@ -25,7 +26,7 @@ jobs:
         run: |
           echo '${{ secrets.FIREBASE_KEY }}' > serviceAccountKey.json
 
-      - name: Run scraper
+      - name: Run scraper and update Firestore
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPEN_AI_API_KEY: ${{ secrets.OPEN_AI_API_KEY }}
         run: python scrape_jobcode_to_firestore.py

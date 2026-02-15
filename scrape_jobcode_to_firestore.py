@@ -2,46 +2,36 @@ import requests
 import re
 import pytz
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 import firebase_admin
 from firebase_admin import credentials, firestore, messaging
-from google import genai
-from google.genai import types
 import os
 import time
+import openai
 
 # ------------------ FIREBASE INIT ------------------
-
 cred = credentials.Certificate("serviceAccountKey.json")
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# ------------------ AI INIT ------------------
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable is not set. Please configure it in GitHub Secrets.")
-
-client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL_ID = "gemini-2.0-flash-exp"
+# ------------------ OPENAI INIT ------------------
+OPENAI_API_KEY = os.getenv("OPEN_AI_API_KEY")
+if not OPENAI_API_KEY:
+    raise ValueError("OPEN_AI_API_KEY not set in environment variables.")
+openai.api_key = OPENAI_API_KEY
 
 # ------------------ CONFIG ------------------
-
 BASE_API = "https://jobcode.in/wp-json/wp/v2/posts?per_page=100&page="
 IST = pytz.timezone("Asia/Kolkata")
 
-# ------------------ FETCH JOBS PAGE BY PAGE ------------------
+# ------------------ HELPER FUNCTIONS ------------------
 
 def fetch_jobs_page(page):
-    print(f"Fetching page {page}...")
     response = requests.get(BASE_API + str(page))
     if response.status_code != 200:
         return []
-    data = response.json()
-    return data
-
-# ------------------ CLASSIFY JOB ------------------
+    return response.json()
 
 def classify_job(title, content):
     text = f"{title} {content}".lower()
@@ -51,8 +41,6 @@ def classify_job(title, content):
         return "fresher"
     return "experienced"
 
-# ------------------ EXTRACT APPLY LINK ------------------
-
 def extract_apply_link(html):
     soup = BeautifulSoup(html, "html.parser")
     apply_button = soup.find("a", string=re.compile("Apply", re.IGNORECASE))
@@ -60,67 +48,49 @@ def extract_apply_link(html):
         return apply_button["href"]
     return ""
 
-# ------------------ EXTRACT JOB DETAILS WITH AI ------------------
-
 def extract_job_details_with_ai(title, content_html, default_link):
     soup = BeautifulSoup(content_html, "html.parser")
     clean_text = soup.get_text(separator="\n").strip()
+    clean_text_short = clean_text[:1500]  # Limit to save tokens
 
     prompt = f"""
-Analyze the following job posting and extract information in strict JSON format.
-Return ONLY a valid JSON object with these fields:
+Extract the job details into strict JSON only, no explanation. 
+Use these fields: company, location, experience, jobType, salary, description, requirements, preferredSkills, notificationTitle.
 
 Job Title: {title}
-
-Job Content:
-{clean_text}
-
-Fields:
-- company
-- location
-- experience
-- jobType
-- salary
-- description
-- requirements
-- preferredSkills
-- notificationTitle
-Return ONLY JSON object.
+Job Content: {clean_text_short}
 """
+
     try:
-        response = client.models.generate_content(
-            model=MODEL_ID,
-            contents=prompt
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
         )
-        response_text = response.text.strip()
+        response_text = response.choices[0].message.content.strip()
         if response_text.startswith("```"):
             response_text = re.sub(r'^```json?\n', '', response_text)
             response_text = re.sub(r'\n```$', '', response_text)
-            response_text = response_text.strip()
+
         job_details = json.loads(response_text)
 
-        # Defaults
         defaults = {
             "company": "Not Specified",
             "location": "Not Specified",
             "experience": "Not Specified",
             "jobType": "Not Specified",
             "salary": "Not Disclosed",
-            "description": clean_text[:500] if clean_text else "No description available",
+            "description": clean_text[:300],
             "requirements": "Not Specified",
             "preferredSkills": "Not Specified",
-            "notificationTitle": f"New Job at {job_details.get('company', 'Company')}"
+            "notificationTitle": f"New Job at {job_details.get('company','Company')}"
         }
 
         for key, value in defaults.items():
-            if key not in job_details or not job_details[key] or job_details[key].strip() == "":
+            if key not in job_details or not job_details[key] or str(job_details[key]).strip() == "":
                 job_details[key] = value
 
-        apply_link = extract_apply_link(content_html)
-        if not apply_link:
-            apply_link = default_link
-        job_details["applyLink"] = apply_link
-
+        job_details["applyLink"] = extract_apply_link(content_html) or default_link
         return job_details
 
     except Exception as e:
@@ -131,18 +101,55 @@ Return ONLY JSON object.
             "experience": "Not Specified",
             "jobType": "Not Specified",
             "salary": "Not Disclosed",
-            "description": clean_text[:500] if clean_text else "No description available",
+            "description": clean_text[:300],
             "requirements": "Not Specified",
             "preferredSkills": "Not Specified",
             "notificationTitle": f"New Job Available",
             "applyLink": default_link
         }
 
-# ------------------ SEND NOTIFICATION ------------------
+def save_job(job):
+    title_html = job.get("title", {}).get("rendered", "")
+    content_html = job.get("content", {}).get("rendered", "")
+    link = job.get("link", "")
+
+    clean_title = BeautifulSoup(title_html, "html.parser").get_text()
+
+    # Skip if job already exists
+    existing = list(db.collection("Directjobs").where("applyLink", "==", link).limit(1).stream())
+    if existing:
+        return False
+
+    ai_data = extract_job_details_with_ai(clean_title, content_html, link)
+    now = datetime.now(IST)
+
+    job_data = {
+        "active": True,
+        "approved": True,
+        "title": clean_title,
+        "company": ai_data.get("company"),
+        "location": ai_data.get("location"),
+        "experience": ai_data.get("experience"),
+        "jobType": ai_data.get("jobType"),
+        "salary": ai_data.get("salary"),
+        "description": ai_data.get("description"),
+        "requirements": ai_data.get("requirements"),
+        "preferredSkills": ai_data.get("preferredSkills"),
+        "applyLink": ai_data.get("applyLink"),
+        "jobid": "",
+        "jobposterid": "",
+        "source": "jobcode.in",
+        "sourceFile": "scrape_jobcode_to_firestore.py",
+        "jobFor": classify_job(clean_title, content_html),
+        "createdAt": now,
+        "postedAt": now,
+    }
+
+    db.collection("Directjobs").add(job_data)
+    print(f"✓ Added Job: {clean_title}")
+    return ai_data.get("notificationTitle")
 
 def send_notification(title):
-    print("Sending notification...")
-
     tokens = []
     users = db.collection("users").stream()
     for user in users:
@@ -186,52 +193,13 @@ def send_notification(title):
     print("  Success:", response.success_count)
     print("  Failed:", response.failure_count)
 
-# ------------------ SAVE JOB ------------------
-
-def save_job(job):
-    title = job.get("title", {}).get("rendered", "")
-    content = job.get("content", {}).get("rendered", "")
-    link = job.get("link", "")
-
-    clean_title = BeautifulSoup(title, "html.parser").get_text()
-
-    existing = list(db.collection("Directjobs").where("applyLink", "==", link).limit(1).stream())
-    if existing:
-        return False  # already exists
-
-    ai_data = extract_job_details_with_ai(clean_title, content, link)
-    now = datetime.now(IST)
-    job_data = {
-        "active": True,
-        "approved": True,
-        "title": clean_title,
-        "company": ai_data.get("company", "Not Specified"),
-        "location": ai_data.get("location", "Not Specified"),
-        "experience": ai_data.get("experience", "Not Specified"),
-        "jobType": ai_data.get("jobType", "Not Specified"),
-        "salary": ai_data.get("salary", "Not Disclosed"),
-        "description": ai_data.get("description", ""),
-        "requirements": ai_data.get("requirements", "Not Specified"),
-        "preferredSkills": ai_data.get("preferredSkills", "Not Specified"),
-        "applyLink": ai_data.get("applyLink", link),
-        "jobid": "",
-        "jobposterid": "",
-        "source": "jobcode.in",
-        "sourceFile": "scrape_jobcode_to_firestore.py",
-        "jobFor": classify_job(clean_title, content),
-        "createdAt": now,
-        "postedAt": now,
-    }
-
-    db.collection("Directjobs").add(job_data)
-    print(f"✓ Added Job: {clean_title}")
-    return ai_data.get("notificationTitle", f"New Job at {job_data['company']}")
-
 # ------------------ MAIN ------------------
-
 if __name__ == "__main__":
     page = 1
     latest_notification_title = None
+
+    today = datetime.now(IST).date()
+    yesterday = today - timedelta(days=1)
 
     while True:
         jobs = fetch_jobs_page(page)
@@ -239,10 +207,18 @@ if __name__ == "__main__":
             break
 
         for job in jobs:
+            # Only process jobs posted today or yesterday
+            job_date_str = job.get("date")
+            if job_date_str:
+                job_date = datetime.fromisoformat(job_date_str.replace("Z", "+00:00")).astimezone(IST).date()
+                if job_date not in [today, yesterday]:
+                    continue
+
             notification_title = save_job(job)
             if notification_title:
                 latest_notification_title = notification_title
-            time.sleep(1)  # process one job at a time
+
+            time.sleep(0.5)  # prevent overload
 
         page += 1
 
