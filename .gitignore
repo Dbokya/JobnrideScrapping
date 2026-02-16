@@ -2,6 +2,16 @@
 serviceaccount/jobnride-97d77-firebase-adminsdk-fbsvc-20ce6e6129.json
 serviceaccount/*.json
 
+# User data (contains personal information)
+users.xlsx
+users.csv
+users_to_email.xlsx
+users_with_accounts.xlsx
+linkedin_email_campaign/users.xlsx
+linkedin_email_campaign/users_to_email.xlsx
+linkedin_email_campaign/users_with_accounts.xlsx
+user_data.*
+
 # Environment variables and API keys
 *.key
 .env

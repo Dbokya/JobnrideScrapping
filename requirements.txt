@@ -4,3 +4,5 @@ beautifulsoup4
 pytz
 google-genai
 openai==0.28.0
+pandas
+openpyxl

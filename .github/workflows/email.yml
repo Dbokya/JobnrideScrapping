@@ -1,0 +1,62 @@
+name: Email Automation
+
+on:
+  schedule:
+    # Runs daily at 13:00 IST (07:30 UTC)
+    - cron: "30 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  email:
+    runs-on: ubuntu-latest
+    env:
+      FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
+      BREVO_API_V3_KEY: ${{ secrets.BREVO_API_V3_KEY }}
+      BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+      BREVO_LOGIN: ${{ secrets.BREVO_LOGIN }}
+      HOSTINGER_PASSWORD: ${{ secrets.HOSTINGER_PASSWORD }}
+      OPEN_AI_API_KEY: ${{ secrets.OPEN_AI_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Pre-check required secrets
+        run: |
+          missing=()
+          if [ -z "$FIREBASE_KEY" ]; then missing+=(FIREBASE_KEY); fi
+          if [ -z "$BREVO_API_V3_KEY" ] && [ -z "$HOSTINGER_PASSWORD" ]; then missing+=(BREVO_API_V3_KEY_or_HOSTINGER_PASSWORD); fi
+          if [ -n "$BREVO_API_KEY" ] && [ -z "$BREVO_LOGIN" ]; then missing+=(BREVO_LOGIN_required_for_BREVO_API_KEY); fi
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "Required secrets missing: ${missing[*]}"
+            exit 1
+          fi
+          echo "All required secrets present (or at least one provider configured)."
+
+      - run: pip install -r requirements.txt
+
+      - name: Create serviceaccount directory and write Firebase key
+        run: |
+          mkdir -p serviceaccount
+          echo '${{ secrets.FIREBASE_KEY }}' > serviceaccount/jobnride-97d77-firebase-adminsdk-fbsvc-20ce6e6129.json
+
+      - name: Run email campaign script
+        env:
+          BREVO_API_V3_KEY: ${{ secrets.BREVO_API_V3_KEY }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          BREVO_LOGIN: ${{ secrets.BREVO_LOGIN }}
+          HOSTINGER_PASSWORD: ${{ secrets.HOSTINGER_PASSWORD }}
+          FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
+        run: |
+          python linkedin_email_campaign/send_emails_multi_provider.py
+
+      - name: Commit updated user files
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git add linkedin_email_campaign/users_with_accounts.xlsx linkedin_email_campaign/users_to_email.xlsx || true
+          git commit -m "Update users files after email campaign" || echo "No changes"
+          git push || echo "Push failed"
