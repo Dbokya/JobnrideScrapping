@@ -227,7 +227,9 @@ def categorize_users():
 def main():
     parser = argparse.ArgumentParser(description='Send emails via Hostinger or Brevo')
     parser.add_argument('--test-email', help='Send a single test email to this address and exit')
-    parser.add_argument('--provider', choices=['hostinger', 'brevo', 'auto'], default='auto', help='Provider to use for test-email (default: auto)')
+    parser.add_argument('--provider', choices=['hostinger', 'brevo', 'auto'], default='auto', help='Provider to use for test-email or non-interactive runs (default: auto)')
+    parser.add_argument('--auto', action='store_true', help='Run non-interactively: choose provider automatically and skip confirmations')
+    parser.add_argument('--yes', action='store_true', help='Auto-confirm sending when in non-interactive mode')
     args = parser.parse_args()
 
     # If test-email provided, perform a one-off send and exit
@@ -250,28 +252,37 @@ def main():
         ok = send_email(to_addr, provider, use_starttls)
         print("Done. Success:" , ok)
         return
-    # Choose email provider
-    print("\n" + "="*70)
-    print("📧 EMAIL PROVIDER SELECTION")
-    print("="*70)
-    print("1. Hostinger (100 emails/day)")
-    print("2. Brevo (100 emails/day)")
-    print("="*70)
-    
-    provider_choice = input("Select provider (1 or 2): ").strip()
-    
-    if provider_choice == "1":
-        provider_key = "hostinger"
-        use_starttls = False
-    elif provider_choice == "2":
-        provider_key = "brevo"
-        use_starttls = True
-        if not EMAIL_PROVIDERS["brevo"]["sender_password"]:
-            print("❌ ERROR: BREVO_API_KEY environment variable not set")
-            print("Set it using: $env:BREVO_API_KEY='your-brevo-api-key'")
-            return
+    # Provider selection (interactive unless --auto)
+    if args.provider != 'auto' and not args.test_email:
+        # explicit provider passed for non-test run
+        provider_key = args.provider
+    elif args.auto or os.getenv('CI', '').lower() == 'true':
+        # non-interactive: prefer Brevo if configured, else Hostinger
+        if BREVO_API_V3_KEY or os.getenv('BREVO_API_KEY'):
+            provider_key = 'brevo'
+        else:
+            provider_key = 'hostinger'
     else:
-        print("❌ Invalid choice")
+        # interactive prompt
+        print("\n" + "="*70)
+        print("📧 EMAIL PROVIDER SELECTION")
+        print("="*70)
+        print("1. Hostinger (100 emails/day)")
+        print("2. Brevo (100 emails/day)")
+        print("="*70)
+        provider_choice = input("Select provider (1 or 2): ").strip()
+        if provider_choice == "1":
+            provider_key = "hostinger"
+        elif provider_choice == "2":
+            provider_key = "brevo"
+        else:
+            print("❌ Invalid choice")
+            return
+
+    use_starttls = True if provider_key == 'brevo' else False
+    if provider_key == 'brevo' and not EMAIL_PROVIDERS['brevo']['sender_password']:
+        print("❌ ERROR: BREVO_API_KEY environment variable not set")
+        print("Set it using: $env:BREVO_API_KEY='your-brevo-api-key'")
         return
     
     provider = EMAIL_PROVIDERS[provider_key]
@@ -306,11 +317,12 @@ def main():
         print("✅ All users have already received emails!")
         return
     
-    # Confirm before sending
-    confirm = input(f"Send {emails_to_send} emails via {provider['name']}? (yes/no): ").lower()
-    if confirm != 'yes':
-        print("❌ Email sending cancelled")
-        return
+    # Confirm before sending (skip if --auto or --yes)
+    if not args.auto and not args.yes:
+        confirm = input(f"Send {emails_to_send} emails via {provider['name']}? (yes/no): ").lower()
+        if confirm != 'yes':
+            print("❌ Email sending cancelled")
+            return
     
     # Send emails
     sent_count = 0
