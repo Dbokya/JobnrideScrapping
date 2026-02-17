@@ -9,6 +9,8 @@ from firebase_admin import credentials, firestore, messaging
 import os
 import time
 import openai
+import sys
+import requests as _requests_existence_check
 
 # ------------------ FIREBASE INIT ------------------
 cred = credentials.Certificate("serviceaccount/jobnride-97d77-firebase-adminsdk-fbsvc-20ce6e6129.json")
@@ -17,9 +19,15 @@ db = firestore.client()
 
 # ------------------ OPENAI INIT ------------------
 OPENAI_API_KEY = os.getenv("OPEN_AI_API_KEY")
-if not OPENAI_API_KEY:
-    raise ValueError("OPEN_AI_API_KEY environment variable is required")
-openai.api_key = OPENAI_API_KEY
+SKIP_AI = os.getenv("SKIP_AI", "false").lower() in ("1", "true", "yes")
+OPENAI_API_KEY = os.getenv("OPEN_AI_API_KEY")
+if not OPENAI_API_KEY and not SKIP_AI:
+    raise ValueError("OPEN_AI_API_KEY environment variable is required (or set SKIP_AI=true to run without AI)")
+if OPENAI_API_KEY:
+    openai.api_key = OPENAI_API_KEY
+
+# Allow overriding the OpenAI model via env var. Default to a higher-accuracy model.
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
 # ------------------ CONFIG ------------------
 BASE_API = "https://jobcode.in/wp-json/wp/v2/posts?per_page=100&page="
@@ -27,11 +35,31 @@ IST = pytz.timezone("Asia/Kolkata")
 
 # ------------------ HELPER FUNCTIONS ------------------
 
-def fetch_jobs_page(page):
-    response = requests.get(BASE_API + str(page))
-    if response.status_code != 200:
-        return []
-    return response.json()
+def fetch_jobs_page(page, retries=5, backoff_factor=1, timeout=10):
+    """Fetch jobs page JSON with retries and exponential backoff.
+
+    Returns:
+      - list (possibly empty) on success
+      - empty list if page exists but returns non-200
+      - None on persistent network failure (caller should handle exit)
+    """
+    url = BASE_API + str(page)
+    for attempt in range(1, retries + 1):
+        try:
+            resp = requests.get(url, timeout=timeout, headers={"User-Agent": "JobNRideBot/1.0"})
+            if resp.status_code != 200:
+                print(f"⚠ HTTP {resp.status_code} when fetching page {page}")
+                return []
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            # Network-related error, retry with exponential backoff
+            wait = backoff_factor * (2 ** (attempt - 1))
+            print(f"⚠ Network error fetching {url}: {e} (attempt {attempt}/{retries}). Retrying in {wait}s...")
+            time.sleep(wait)
+
+    # All retries exhausted — indicate persistent network failure
+    print(f"❌ Failed to fetch {url} after {retries} attempts. Network may be unreachable.")
+    return None
 
 def classify_job(title, content):
     text = f"{title} {content}".lower()
@@ -329,8 +357,33 @@ def extract_job_details_with_ai(title, content_html, default_link):
     responsibilities = extract_responsibilities(content_html)
     if responsibilities:
         print(f"\n✓ Extracted responsibilities: {len(responsibilities)} characters")
-    
-    # Check if we have all required fields from table
+    # --- Always try apply-link page first and merge its structured data ---
+    apply_url = default_link or extract_apply_link(content_html)
+    apply_table_data = {}
+    apply_responsibilities = ""
+    apply_html = None
+    if apply_url:
+        apply_html = fetch_url_html(apply_url)
+        if apply_html:
+            try:
+                apply_table_data = extract_from_table(apply_html)
+                apply_responsibilities = extract_responsibilities(apply_html)
+                if apply_table_data:
+                    print(f"✓ Extracted {len(apply_table_data)} fields from apply page")
+            except Exception as e:
+                print(f"⚠ Error extracting from apply page: {e}")
+
+    # Merge apply page data into table_data (apply page preferred when present)
+    if apply_table_data:
+        for k, v in apply_table_data.items():
+            if v and (k not in table_data or not table_data.get(k)):
+                table_data[k] = v
+                print(f"✓ Using apply-page data for {k}: {str(v)[:80]}")
+    # prefer apply responsibilities if table lacked them
+    if apply_responsibilities and not responsibilities:
+        responsibilities = apply_responsibilities
+
+    # Check if we have all required fields from merged table data
     required_fields = ["company", "location", "experience", "jobType"]
     has_all_required = all(field in table_data for field in required_fields)
 
@@ -342,7 +395,7 @@ def extract_job_details_with_ai(title, content_html, default_link):
     need_ai = (not has_all_required) or (desc_len < 100) or (resp_len < 50) or (not has_skills)
 
     if not need_ai:
-        print(f"\n✅ Table contains required fields and is sufficiently detailed - using table data directly")
+        print(f"\n✅ Table (merged) contains required fields and is sufficiently detailed - using table data directly")
         # Build job details from table data
         experience_normalized = normalize_experience(table_data.get("experience", "Not Specified"))
 
@@ -357,7 +410,7 @@ def extract_job_details_with_ai(title, content_html, default_link):
             "preferredSkills": table_data.get("preferredSkills", "Not Specified"),
             "responsibilities": table_data.get("responsibilities", responsibilities if responsibilities else "Not Specified"),
             "notificationTitle": f"New Job at {table_data.get('company', 'Company')}",
-            "applyLink": extract_apply_link(content_html) or default_link
+            "applyLink": apply_url or extract_apply_link(content_html) or default_link
         }
 
         # Log the table-extracted data
@@ -369,33 +422,6 @@ def extract_job_details_with_ai(title, content_html, default_link):
 
         return job_details
 
-    # If not all fields or data is insufficient, first try the apply link page as fallback
-    print(f"\n🔎 Table data insufficient — trying apply link for more details if available...")
-    apply_url = default_link or extract_apply_link(content_html)
-    apply_html = None
-    apply_table_data = {}
-    apply_responsibilities = ""
-    if apply_url:
-        apply_html = fetch_url_html(apply_url)
-        if apply_html:
-            try:
-                apply_table_data = extract_from_table(apply_html)
-                apply_responsibilities = extract_responsibilities(apply_html)
-                if apply_table_data:
-                    print(f"✓ Extracted {len(apply_table_data)} fields from apply page")
-            except Exception as e:
-                print(f"⚠ Error extracting from apply page: {e}")
-
-    # Merge apply page data into table_data if found
-    if apply_table_data:
-        for k, v in apply_table_data.items():
-            if v and (k not in table_data or not table_data.get(k)):
-                table_data[k] = v
-                print(f"✓ Using apply-page data for {k}: {str(v)[:80]}")
-        # prefer apply responsibilities if table lacked them
-        if apply_responsibilities and not responsibilities:
-            responsibilities = apply_responsibilities
-
     # If after apply page merge we still need more detail, use AI to supplement
     print(f"\n🤖 Proceeding to AI enrichment if needed...")
 
@@ -405,7 +431,7 @@ def extract_job_details_with_ai(title, content_html, default_link):
     prompt = f"""
 You are a professional job content analyzer. Read the ENTIRE job posting carefully and extract accurate, well-formatted information.
 
-OUTPUT FORMAT: Return ONLY valid JSON with these exact fields: company, location, experience, jobType, salary, description, requirements, preferredSkills, notificationTitle
+OUTPUT FORMAT: Return ONLY valid JSON with these exact fields: company, location, experience, jobType, salary, description, requirements, preferredSkills, responsibilities, skill, notificationTitle
 
 CRITICAL INSTRUCTIONS:
 
@@ -456,6 +482,15 @@ CRITICAL INSTRUCTIONS:
    - Prioritize technical skills first, then soft skills
    - Use standard skill names (e.g., "React.js" not "react")
 
+10. RESPONSIBILITIES:
+    - Provide a clear list of key responsibilities as short bullets (3-10 items)
+    - Each item should be concise (6-25 words)
+    - Return responsibilities as either a JSON array or a string; parser will normalize to semicolon-separated string
+    - Prioritize action-oriented verbs ("Design", "Develop", "Maintain")
+
+11. SKILL:
+    - Provide a canonical, comma-separated skill list (same as `preferredSkills`) in the field `skill`
+
 9. NOTIFICATION TITLE:
    - Create an engaging, concise title (max 60 characters)
    - Format: "New Job at [Company Name]" or "Hiring [Role] at [Company]"
@@ -476,106 +511,187 @@ Job Content:
 
 Return ONLY the JSON object, no explanations or markdown."""
 
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-        )
-        response_text = response.choices[0].message.content.strip()
-        if response_text.startswith("```"):
-            response_text = re.sub(r'^```json?\n', '', response_text)
-            response_text = re.sub(r'\n```$', '', response_text)
+    # If SKIP_AI is enabled, build a structured fallback from available content
+    if SKIP_AI:
+        print("⚠ SKIP_AI enabled — not calling OpenAI. Building fallback description and responsibilities from page content.")
+        # Prefer table/apply data if present
+        desc_parts = []
+        if table_data.get('description'):
+            desc_parts.append(table_data.get('description'))
+        if responsibilities:
+            desc_parts.append("Responsibilities: " + responsibilities)
+        if table_data.get('requirements'):
+            desc_parts.append("Requirements: " + table_data.get('requirements'))
+        # include a short excerpt from the page content if still small
+        if not desc_parts:
+            desc_text = clean_text[:200]
+            desc_parts.append(desc_text)
 
-        job_details = json.loads(response_text)
-        
-        # Create a better description fallback from content
-        fallback_description = clean_text[:500] if clean_text else "No description available"
+        description = "\n\n".join(desc_parts)
+        # ensure reasonable length
+        if len(description.split()) < 120:
+            description = (description + "\n\n" + clean_text[:400]).strip()
 
-        defaults = {
-            "company": "Not Specified",
-            "location": "Not Specified",
-            "experience": "Not Specified",
-            "jobType": "Not Specified",
-            "salary": "Not Disclosed",
-            "description": fallback_description,
-            "requirements": "Not Specified",
-            "preferredSkills": "Not Specified",
-            "responsibilities": responsibilities if responsibilities else "Not Specified",
-            "notificationTitle": f"New Job at {job_details.get('company','Company')}"
-        }
-
-        for key, value in defaults.items():
-            if key not in job_details or not job_details[key] or str(job_details[key]).strip() == "":
-                job_details[key] = value
-        
-        # Add extracted responsibilities if not in table (medium priority)
-        if responsibilities and "responsibilities" not in table_data:
-            job_details["responsibilities"] = responsibilities
-        
-        # Override with table data (highest priority)
-        for key, value in table_data.items():
-            if value and str(value).strip():
-                job_details[key] = value
-                print(f"✓ Using table data for {key}: {value[:80] if len(str(value)) > 80 else value}")
-
-        # Add apply link before logging
-        job_details["applyLink"] = extract_apply_link(content_html) or default_link
-        
-        # Normalize experience to standard year ranges
-        experience = job_details.get("experience", "Not Specified")
-        normalized_exp = normalize_experience(experience)
-        if normalized_exp != experience:
-            job_details["experience"] = normalized_exp
-            print(f"✓ Normalized experience: '{experience}' → '{normalized_exp}'")
-        
-        # Log description extraction
-        description = job_details.get("description", "")
-        if description:
-            desc_length = len(description)
-            word_count = len(description.split())
-            print(f"✓ Extracted description: {desc_length} characters, {word_count} words")
-        
-        # Update notification title with correct company name
-        company_name = job_details.get("company", "Company")
-        if company_name != "Not Specified":
-            job_details["notificationTitle"] = f"New Job at {company_name}"
-        
-        # Log the AI-curated JSON data
-        print("\n" + "="*70)
-        print("🤖 AI-CURATED JOB DATA (JSON):")
-        print("="*70)
-        print(json.dumps(job_details, indent=2, ensure_ascii=False))
-        print("="*70 + "\n")
-
-        return job_details
-
-    except Exception as e:
-        print(f"⚠ AI extraction failed: {e}")
-        
-        # Use table data as fallback
-        experience_raw = table_data.get("experience", "Not Specified")
-        experience_normalized = normalize_experience(experience_raw)
-        
-        # Use table description if available, otherwise extract from content
-        description = table_data.get("description", clean_text[:500] if clean_text else "No description available")
-        
-        fallback_data = {
-            "company": table_data.get("company", "Not Specified"),
-            "location": table_data.get("location", "Not Specified"),
-            "experience": experience_normalized,
-            "jobType": table_data.get("jobType", "Not Specified"),
-            "salary": table_data.get("salary", "Not Disclosed"),
+        job_details = {
+            "company": table_data.get('company', 'Not Specified'),
+            "location": table_data.get('location', 'Not Specified'),
+            "experience": table_data.get('experience', 'Not Specified'),
+            "jobType": table_data.get('jobType', 'Not Specified'),
+            "salary": table_data.get('salary', 'Not Disclosed'),
             "description": description,
-            "requirements": table_data.get("requirements", "Not Specified"),
-            "preferredSkills": table_data.get("preferredSkills", "Not Specified"),
-            "responsibilities": responsibilities if responsibilities else "Not Specified",
-            "notificationTitle": f"New Job at {table_data.get('company', 'Company')}",
-            "applyLink": extract_apply_link(content_html) or default_link
+            "requirements": table_data.get('requirements', 'Not Specified'),
+            "preferredSkills": table_data.get('preferredSkills', 'Not Specified'),
+            "responsibilities": responsibilities if responsibilities else table_data.get('responsibilities', 'Not Specified'),
+            "notificationTitle": f"New Job at {table_data.get('company','Company')}"
         }
-        
-        print(f"✓ Using table-extracted data as fallback")
-        return fallback_data
+
+    else:
+        # Call OpenAI to extract structured fields and fall back to table data on error
+        try:
+            response = openai.ChatCompletion.create(
+                model=OPENAI_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+            )
+            response_text = response.choices[0].message.content.strip()
+            if response_text.startswith("```"):
+                response_text = re.sub(r'^```json?\n', '', response_text)
+                response_text = re.sub(r'\n```$', '', response_text)
+
+            job_details = json.loads(response_text)
+
+            # Create a better description fallback from content
+            fallback_description = clean_text[:500] if clean_text else "No description available"
+
+            defaults = {
+                "company": "Not Specified",
+                "location": "Not Specified",
+                "experience": "Not Specified",
+                "jobType": "Not Specified",
+                "salary": "Not Disclosed",
+                "description": fallback_description,
+                "requirements": "Not Specified",
+                "preferredSkills": "Not Specified",
+                "responsibilities": responsibilities if responsibilities else "Not Specified",
+                "notificationTitle": f"New Job at {job_details.get('company','Company')}"
+            }
+
+            for key, value in defaults.items():
+                if key not in job_details or not job_details[key] or str(job_details[key]).strip() == "":
+                    job_details[key] = value
+
+            # Add extracted responsibilities if not in table (medium priority)
+            if responsibilities and "responsibilities" not in table_data:
+                job_details["responsibilities"] = responsibilities
+
+            # Override with table data (highest priority)
+            for key, value in table_data.items():
+                if value and str(value).strip():
+                    job_details[key] = value
+                    print(f"✓ Using table data for {key}: {value[:80] if len(str(value)) > 80 else value}")
+
+            # Add apply link before logging
+            job_details["applyLink"] = extract_apply_link(content_html) or default_link
+
+            # Normalize experience to standard year ranges
+            experience = job_details.get("experience", "Not Specified")
+            normalized_exp = normalize_experience(experience)
+            if normalized_exp != experience:
+                job_details["experience"] = normalized_exp
+                print(f"✓ Normalized experience: '{experience}' → '{normalized_exp}'")
+
+            # Normalize responsibilities: accept lists or strings and produce semicolon-separated string
+            resp = job_details.get("responsibilities", "")
+            if isinstance(resp, list):
+                resp_list = [re.sub(r"\s+", " ", r).strip() for r in resp if r and len(str(r).strip()) > 3]
+                job_details["responsibilities"] = "; ".join(resp_list)
+            elif isinstance(resp, str):
+                parts = re.split(r"\n|\r|•|‣|◦|;|\-|\u2022|\u2023|\u25E6", resp)
+                parts = [p.strip(" \t-•‣◦") for p in parts]
+                parts = [p for p in parts if p and len(p) > 3]
+                if parts:
+                    job_details["responsibilities"] = "; ".join(parts)
+                else:
+                    job_details["responsibilities"] = resp.strip()
+
+            # Normalize preferredSkills to comma-separated string
+            prefs = job_details.get("preferredSkills", "")
+            if isinstance(prefs, list):
+                prefs_list = [re.sub(r"\s+", " ", s).strip() for s in prefs if s and len(str(s).strip()) > 1]
+                job_details["preferredSkills"] = ", ".join(prefs_list)
+            elif isinstance(prefs, str):
+                s = prefs.replace(";", ",")
+                s = re.sub(r",\s*", ", ", s)
+                job_details["preferredSkills"] = s.strip()
+
+            # Ensure singular 'skill' field exists (same as preferredSkills)
+            job_details["skill"] = job_details.get("preferredSkills", "Not Specified")
+
+            # Log description extraction and length
+            description = job_details.get("description", "")
+            if description:
+                desc_length = len(description)
+                word_count = len(description.split())
+                print(f"✓ Extracted description: {desc_length} characters, {word_count} words")
+
+            # If description is too short and AI is available, ask AI to expand to 250-350 words
+            if not SKIP_AI and OPENAI_API_KEY:
+                try:
+                    word_count = len(description.split())
+                    if word_count < 200:
+                        expand_prompt = f"Expand the following job description to be between 250 and 350 words, professional tone, keep facts unchanged.\n\nCurrent description:\n{description}\n\nAlso ensure responsibilities are preserved: {job_details.get('responsibilities','')}. Return only the expanded description text."
+                        exp_resp = openai.ChatCompletion.create(
+                            model=OPENAI_MODEL,
+                            messages=[{"role": "user", "content": expand_prompt}],
+                            temperature=0.2,
+                        )
+                        expanded_text = exp_resp.choices[0].message.content.strip()
+                        if expanded_text:
+                            job_details["description"] = expanded_text
+                            print(f"✓ Expanded description to {len(expanded_text.split())} words via AI")
+                except Exception as ee:
+                    print(f"⚠ Description expansion failed: {ee}")
+
+            # Update notification title with correct company name
+            company_name = job_details.get("company", "Company")
+            if company_name != "Not Specified":
+                job_details["notificationTitle"] = f"New Job at {company_name}"
+
+            # Log the AI-curated JSON data
+            print("\n" + "="*70)
+            print("🤖 AI-CURATED JOB DATA (JSON):")
+            print("="*70)
+            print(json.dumps(job_details, indent=2, ensure_ascii=False))
+            print("="*70 + "\n")
+
+            return job_details
+
+        except Exception as e:
+            print(f"⚠ AI extraction failed: {e}")
+
+            # Use table data as fallback
+            experience_raw = table_data.get("experience", "Not Specified")
+            experience_normalized = normalize_experience(experience_raw)
+
+            # Use table description if available, otherwise extract from content
+            description = table_data.get("description", clean_text[:500] if clean_text else "No description available")
+
+            fallback_data = {
+                "company": table_data.get("company", "Not Specified"),
+                "location": table_data.get("location", "Not Specified"),
+                "experience": experience_normalized,
+                "jobType": table_data.get("jobType", "Not Specified"),
+                "salary": table_data.get("salary", "Not Disclosed"),
+                "description": description,
+                "requirements": table_data.get("requirements", "Not Specified"),
+                "preferredSkills": table_data.get("preferredSkills", "Not Specified"),
+                "responsibilities": responsibilities if responsibilities else "Not Specified",
+                "notificationTitle": f"New Job at {table_data.get('company', 'Company')}",
+                "applyLink": extract_apply_link(content_html) or default_link
+            }
+
+            print(f"✓ Using table-extracted data as fallback")
+            return fallback_data
 
 def save_job(job):
     title_html = job.get("title", {}).get("rendered", "")
@@ -757,6 +873,9 @@ if __name__ == "__main__":
 
     while True:
         jobs = fetch_jobs_page(page)
+        if jobs is None:
+            print("❌ Persistent network failure detected. Exiting scraper.")
+            sys.exit(1)
         if not jobs:
             break
 
