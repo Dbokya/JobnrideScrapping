@@ -1,5 +1,9 @@
 name: Email Automation
 
+# allow workflow to push updated files
+permissions:
+  contents: write
+
 on:
   schedule:
     # Runs daily at 13:00 IST (07:30 UTC)
@@ -37,6 +41,18 @@ jobs:
           echo "All required secrets present (or at least one provider configured)."
 
       - run: pip install -r requirements.txt
+
+      - name: Ensure users.xlsx exists
+        run: |
+          python - <<'PY'
+          import os
+          import pandas as pd
+          p = 'linkedin_email_campaign/users.xlsx'
+          if not os.path.exists(p):
+              df = pd.DataFrame(columns=['email','lastEmailSent'])
+              df.to_excel(p, index=False)
+          print('users.xlsx ready at', p)
+          PY
 
       - name: Create serviceaccount directory and write Firebase key
         run: |

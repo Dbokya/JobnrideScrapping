@@ -45,19 +45,28 @@ def normalize_experience(experience_text):
     """Normalize experience to standard year ranges: 0-2, 2-5, 5-10, 10+"""
     if not experience_text or experience_text.lower() in ["not specified", "n/a", "na"]:
         return "Not Specified"
-    
-    text = experience_text.lower()
-    
+
+    # Normalize common unicode/human formats and remove noise
+    text = str(experience_text).lower()
+    # replace unicode dashes with ascii
+    text = text.replace('\u2013', '-').replace('\u2014', '-')
+    # common separators like 'to', '–', '—', '–'
+    text = re.sub(r'\bto\b', '-', text)
+    # remove words and punctuation that are irrelevant
+    text = re.sub(r'years?|yrs?|year[s]?|experience|exp\.?', '', text)
+    text = re.sub(r'[^0-9\-\s]', ' ', text)
+    text = text.replace(' ', '')
+
     # Handle freshers explicitly
-    if any(word in text for word in ["fresher", "freshers", "no experience", "entry level", "student", "students"]):
+    if any(word in experience_text.lower() for word in ["fresher", "freshers", "no experience", "entry level", "student", "students"]):
         return "0-2 years"
-    
-    # Extract numbers from text
+
+    # Extract numbers from cleaned text
     numbers = re.findall(r'\d+', text)
-    
     if not numbers:
-        return experience_text  # Return as is if no numbers found
-    
+        # As a last resort, return standardized Not Specified
+        return "Not Specified"
+
     numbers = [int(n) for n in numbers]
     
     # If only one number found
@@ -99,6 +108,20 @@ def extract_apply_link(html):
     if apply_button and apply_button.get("href"):
         return apply_button["href"]
     return ""
+
+
+def fetch_url_html(url, timeout=10):
+    """Fetch HTML of a URL, return None on failure"""
+    try:
+        if not url:
+            return None
+        resp = requests.get(url, timeout=timeout, headers={"User-Agent": "JobNRideBot/1.0"})
+        if resp.status_code == 200:
+            return resp.text
+        print(f"⚠ Failed to fetch apply page {url}: HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"⚠ Exception fetching apply page {url}: {e}")
+    return None
 
 def extract_company_from_url(url):
     """Extract company name from apply link URL."""
@@ -153,7 +176,7 @@ def extract_responsibilities(html):
     headings = soup.find_all(['h2', 'h3', 'h4'])
     
     for heading in headings:
-        heading_text = heading.get_text(strip=True).lower()
+        heading_text = heading.get_text(separator=" ", strip=True).lower()
         
         if 'responsibilit' in heading_text or 'key role' in heading_text or 'duties' in heading_text:
             # Found a responsibilities section, extract content after this heading
@@ -163,12 +186,12 @@ def extract_responsibilities(html):
                 if current.name == 'ul':
                     # Extract list items
                     for li in current.find_all('li'):
-                        text = li.get_text(strip=True)
+                        text = li.get_text(separator=" ", strip=True)
                         if text and len(text) > 5:  # Skip very short items
                             responsibilities.append(text)
                 elif current.name == 'p':
                     # Extract paragraph text
-                    text = current.get_text(strip=True)
+                    text = current.get_text(separator=" ", strip=True)
                     if text and len(text) > 10:
                         responsibilities.append(text)
                 
@@ -184,7 +207,9 @@ def extract_responsibilities(html):
     
     # Join responsibilities with proper formatting
     if responsibilities:
-        return "; ".join(responsibilities[:10])  # Limit to 10 items
+        # Ensure proper spacing and punctuation
+        cleaned = [re.sub(r"\s+", " ", r).strip() for r in responsibilities[:10]]
+        return "; ".join(cleaned)
     
     return ""
 
@@ -305,16 +330,22 @@ def extract_job_details_with_ai(title, content_html, default_link):
     if responsibilities:
         print(f"\n✓ Extracted responsibilities: {len(responsibilities)} characters")
     
-    # Check if we have all required fields from table (skip AI if yes)
+    # Check if we have all required fields from table
     required_fields = ["company", "location", "experience", "jobType"]
     has_all_required = all(field in table_data for field in required_fields)
-    
-    if has_all_required:
-        print(f"\n✅ All required fields found in table - Using table data directly")
-        
+
+    # Decide if we still need AI enrichment: if description or responsibilities or skills are missing or too short
+    desc_len = len(table_data.get('description', '') or '')
+    resp_len = len(responsibilities or '')
+    has_skills = 'preferredSkills' in table_data and table_data.get('preferredSkills') and table_data.get('preferredSkills').strip() != ''
+
+    need_ai = (not has_all_required) or (desc_len < 100) or (resp_len < 50) or (not has_skills)
+
+    if not need_ai:
+        print(f"\n✅ Table contains required fields and is sufficiently detailed - using table data directly")
         # Build job details from table data
         experience_normalized = normalize_experience(table_data.get("experience", "Not Specified"))
-        
+
         job_details = {
             "company": table_data.get("company", "Not Specified"),
             "location": table_data.get("location", "Not Specified"),
@@ -328,15 +359,45 @@ def extract_job_details_with_ai(title, content_html, default_link):
             "notificationTitle": f"New Job at {table_data.get('company', 'Company')}",
             "applyLink": extract_apply_link(content_html) or default_link
         }
-        
+
         # Log the table-extracted data
         print("\n" + "="*70)
         print("📋 TABLE-EXTRACTED JOB DATA (JSON):")
         print("="*70)
         print(json.dumps(job_details, indent=2, ensure_ascii=False))
         print("="*70 + "\n")
-        
+
         return job_details
+
+    # If not all fields or data is insufficient, first try the apply link page as fallback
+    print(f"\n🔎 Table data insufficient — trying apply link for more details if available...")
+    apply_url = default_link or extract_apply_link(content_html)
+    apply_html = None
+    apply_table_data = {}
+    apply_responsibilities = ""
+    if apply_url:
+        apply_html = fetch_url_html(apply_url)
+        if apply_html:
+            try:
+                apply_table_data = extract_from_table(apply_html)
+                apply_responsibilities = extract_responsibilities(apply_html)
+                if apply_table_data:
+                    print(f"✓ Extracted {len(apply_table_data)} fields from apply page")
+            except Exception as e:
+                print(f"⚠ Error extracting from apply page: {e}")
+
+    # Merge apply page data into table_data if found
+    if apply_table_data:
+        for k, v in apply_table_data.items():
+            if v and (k not in table_data or not table_data.get(k)):
+                table_data[k] = v
+                print(f"✓ Using apply-page data for {k}: {str(v)[:80]}")
+        # prefer apply responsibilities if table lacked them
+        if apply_responsibilities and not responsibilities:
+            responsibilities = apply_responsibilities
+
+    # If after apply page merge we still need more detail, use AI to supplement
+    print(f"\n🤖 Proceeding to AI enrichment if needed...")
 
     # If not all fields in table, use AI to supplement
     print(f"\n🤖 Using AI to supplement missing fields...")
