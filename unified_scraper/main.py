@@ -151,11 +151,33 @@ def run():
     print(f"🔁 After in-batch dedup               : {len(unique_jobs)} unique jobs")
     print(f"{'=' * 70}")
 
-    # ── Sort: India jobs first ────────────────────────────────────────────────
-    india_jobs = [j for j in unique_jobs if j.get("country", "").lower() in ["india", "in", ""]]
-    other_jobs = [j for j in unique_jobs if j not in india_jobs]
-    sorted_jobs = india_jobs + other_jobs
-    print(f"🇮🇳 India jobs: {len(india_jobs)}  |  🌍 Other: {len(other_jobs)}")
+    # ── Sort: India → Remote → Other ─────────────────────────────────────────
+    def _is_india(j):
+        c = j.get("country", "").lower()
+        wm = j.get("workMode", "").lower()
+        loc = j.get("location", "").lower()
+        if c in ("india", "in"):
+            return True
+        if wm == "remote" or c in ("remote", "worldwide"):
+            return False
+        # empty country: check location for India city names
+        india_cities = {
+            "india", "bangalore", "bengaluru", "mumbai", "pune", "hyderabad",
+            "chennai", "delhi", "noida", "gurgaon", "gurugram", "kolkata",
+        }
+        return any(city in loc for city in india_cities)
+
+    def _is_remote(j):
+        return (
+            j.get("workMode", "").lower() == "remote"
+            or j.get("country", "").lower() in ("remote", "worldwide")
+        )
+
+    india_jobs  = [j for j in unique_jobs if _is_india(j)]
+    remote_jobs = [j for j in unique_jobs if _is_remote(j) and not _is_india(j)]
+    other_jobs  = [j for j in unique_jobs if not _is_india(j) and not _is_remote(j)]
+    sorted_jobs = india_jobs + remote_jobs + other_jobs
+    print(f"🇮🇳 India: {len(india_jobs)}  |  🌐 Remote: {len(remote_jobs)}  |  🌍 Other: {len(other_jobs)}")
 
     # ── Save to Firebase ─────────────────────────────────────────────────────
     print(f"\n{'=' * 70}")
@@ -210,7 +232,8 @@ def run():
     print(f"   After English Flt  : (filtered)")
     print(f"   After IT Filter    : {len(unique_jobs)}")
     print(f"   🇮🇳 India Jobs     : {len(india_jobs)}")
-    print(f"   🌍 Remote Jobs     : {len(other_jobs)}")
+    print(f"   🌐 Remote Jobs     : {len(remote_jobs)}")
+    print(f"   🌍 Other           : {len(other_jobs)}")
     print(f"   ✅ Saved to DB     : {saved_count}")
     print(f"   ⏭️  Skipped (dup)  : {skipped_count}")
     print(f"   ❌ Errors          : {error_count}")
