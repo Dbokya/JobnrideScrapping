@@ -18,15 +18,16 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 # ------------------ OPENAI INIT ------------------
-OPENAI_API_KEY = os.getenv("OPEN_AI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPEN_AI_API_KEY", "").strip()
 SKIP_AI = os.getenv("SKIP_AI", "false").lower() in ("1", "true", "yes")
-OPENAI_API_KEY = os.getenv("OPEN_AI_API_KEY")
-if not OPENAI_API_KEY and not SKIP_AI:
-    raise ValueError("OPEN_AI_API_KEY environment variable is required (or set SKIP_AI=true to run without AI)")
-if OPENAI_API_KEY:
-    openai.api_key = OPENAI_API_KEY
+if not OPENAI_API_KEY:
+    SKIP_AI = True
+    print("⚠ OPEN_AI_API_KEY not set — running in SKIP_AI mode (table extraction only)")
 
-# Allow overriding the OpenAI model via env var. Default to a higher-accuracy model.
+# openai v1.x client
+_openai_client = openai.OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+# Allow overriding the OpenAI model via env var.
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
 # ------------------ CONFIG ------------------
@@ -59,6 +60,30 @@ def fetch_jobs_page(page, retries=5, backoff_factor=1, timeout=10):
 
     # All retries exhausted — indicate persistent network failure
     print(f"❌ Failed to fetch {url} after {retries} attempts. Network may be unreachable.")
+    return None
+
+def fetch_featured_image_url(media_id, retries=3):
+    """Fetch the actual image URL from WordPress media ID"""
+    if not media_id:
+        return None
+    
+    media_url = f"https://jobcode.in/wp-json/wp/v2/media/{media_id}"
+    
+    for attempt in range(retries):
+        try:
+            resp = requests.get(media_url, timeout=10, headers={"User-Agent": "JobNRideBot/1.0"})
+            if resp.status_code == 200:
+                media_data = resp.json()
+                # Get the full size image URL
+                image_url = media_data.get("source_url")
+                if image_url:
+                    print(f"✓ Found featured image: {image_url}")
+                    return image_url
+        except Exception as e:
+            print(f"⚠ Error fetching media {media_id}: {e}")
+            if attempt < retries - 1:
+                time.sleep(1)
+    
     return None
 
 def classify_job(title, content):
@@ -548,7 +573,7 @@ Return ONLY the JSON object, no explanations or markdown."""
     else:
         # Call OpenAI to extract structured fields and fall back to table data on error
         try:
-            response = openai.ChatCompletion.create(
+            response = _openai_client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
@@ -640,7 +665,7 @@ Return ONLY the JSON object, no explanations or markdown."""
                     word_count = len(description.split())
                     if word_count < 200:
                         expand_prompt = f"Expand the following job description to be between 250 and 350 words, professional tone, keep facts unchanged.\n\nCurrent description:\n{description}\n\nAlso ensure responsibilities are preserved: {job_details.get('responsibilities','')}. Return only the expanded description text."
-                        exp_resp = openai.ChatCompletion.create(
+                        exp_resp = _openai_client.chat.completions.create(
                             model=OPENAI_MODEL,
                             messages=[{"role": "user", "content": expand_prompt}],
                             temperature=0.2,

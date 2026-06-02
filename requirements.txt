@@ -3,6 +3,10 @@ firebase-admin
 beautifulsoup4
 pytz
 google-genai
-openai==0.28.0
+openai>=1.30.0
 pandas
 openpyxl
+gspread
+google-auth
+Pillow
+instagrapi

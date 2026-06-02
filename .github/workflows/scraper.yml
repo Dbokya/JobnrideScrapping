@@ -9,15 +9,19 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.6.0
         with:
           python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -30,4 +34,5 @@ jobs:
       - name: Run scraper and update Firestore
         env:
           OPEN_AI_API_KEY: ${{ secrets.OPEN_AI_API_KEY }}
+          SKIP_AI: ${{ secrets.OPEN_AI_API_KEY == '' && 'true' || 'false' }}
         run: python scrape_jobcode_to_firestore.py
