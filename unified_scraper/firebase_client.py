@@ -73,30 +73,70 @@ def save_job(job_data: dict, job_counter: int) -> bool:
     unique_jobid = f"apijob{job_counter:04d}"
     job_hash = make_job_hash(company, title, location)
 
+    job_type = job_data.get("jobType", "Full-Time")
+    skills_str = job_data.get("preferredSkills", "Not Specified")
+    # Build a keySkills list (array) from comma-separated skills string
+    key_skills_list = (
+        [s.strip() for s in skills_str.split(",") if s.strip() and s.strip() != "Not Specified"]
+        if skills_str and skills_str != "Not Specified" else []
+    )
+
     record = {
+        # ── Core identity ──────────────────────────────────────────────────
         "active": True,
         "approved": True,
-        "title": title,
-        "company": company,
-        "location": location,
-        "experience": job_data.get("experience", "Not Specified"),
-        "jobType": job_data.get("jobType", "Full-Time"),
-        "salary": job_data.get("salary", "Not Disclosed"),
-        "description": job_data.get("description", ""),
-        "requirements": job_data.get("requirements", "Not Specified"),
-        "preferredSkills": job_data.get("preferredSkills", "Not Specified"),
-        "skill": job_data.get("preferredSkills", "Not Specified"),
-        "responsibilities": job_data.get("responsibilities", "Not Specified"),
-        "applyLink": apply_link,
-        "featuredImage": job_data.get("featuredImage", ""),
         "jobid": unique_jobid,
         "jobposterid": "",
+        "dedupHash": job_hash,
         "source": job_data.get("source", "api"),
         "sourceFile": "unified_scraper",
-        "jobFor": job_data.get("jobFor", "experienced"),
-        "dedupHash": job_hash,
+
+        # ── Job basics (Naukri / LinkedIn style) ───────────────────────────
+        "title": title,
+        "company": company,
+        "companyLogo": job_data.get("featuredImage", "") or job_data.get("companyLogo", ""),
+        "aboutCompany": job_data.get("aboutCompany", ""),
+        "location": location,
         "country": job_data.get("country", ""),
+        "workMode": job_data.get("workMode", "On-site"),       # Remote / Hybrid / On-site
+        "jobType": job_type,                                    # Full-Time / Part-Time / Contract / Internship
+        "functionalArea": job_data.get("functionalArea", "Information Technology"),
+        "industry": job_data.get("industry", "Information Technology"),
         "category": job_data.get("category", ""),
+
+        # ── Requirements ──────────────────────────────────────────────────
+        "experience": job_data.get("experience", "Not Specified"),
+        "educationRequirement": job_data.get("educationRequirement", "Not Specified"),
+        "noticePeriod": job_data.get("noticePeriod", "Not Specified"),
+        "totalOpenings": job_data.get("totalOpenings", "Not Specified"),
+
+        # ── Compensation ──────────────────────────────────────────────────
+        "salary": job_data.get("salary", "Not Disclosed"),
+        "benefits": job_data.get("benefits", ""),
+
+        # ── Skills ────────────────────────────────────────────────────────
+        "preferredSkills": skills_str,
+        "skill": skills_str,                                    # legacy alias
+        "keySkills": key_skills_list,                           # array for filtering/tags
+
+        # ── Full description sections ──────────────────────────────────────
+        "description": job_data.get("description", ""),
+        "responsibilities": job_data.get("responsibilities", "Not Specified"),
+        "requirements": job_data.get("requirements", "Not Specified"),
+
+        # ── Apply ─────────────────────────────────────────────────────────
+        "applyLink": apply_link,
+
+        # ── Notification ──────────────────────────────────────────────────
+        "notificationTitle": job_data.get(
+            "notificationTitle",
+            f"New Job at {company}" if company else "New IT Job Alert"
+        ),
+
+        # ── Classification ────────────────────────────────────────────────
+        "jobFor": job_data.get("jobFor", "experienced"),
+
+        # ── Timestamps ────────────────────────────────────────────────────
         "createdAt": now,
         "postedAt": now,
     }

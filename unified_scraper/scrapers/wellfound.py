@@ -9,6 +9,7 @@ import time
 from normalizer import (
     normalize_job_type, classify_job_for,
     clean_html, normalize_location, normalize_skills,
+    normalize_work_mode, extract_education, infer_functional_area, infer_industry,
 )
 
 SOURCE = "wellfound"
@@ -120,12 +121,16 @@ def parse_job(raw: dict) -> dict:
 
     job_for = classify_job_for(title, description_text)
 
+    job_type = normalize_job_type(str(job_type_raw)) if job_type_raw else "Full-Time"
+    company_name = company or "Not Specified"
+    loc_str = location or "India"
+
     return {
         "title": title,
-        "company": company or "Not Specified",
-        "location": location or "India",
+        "company": company_name,
+        "location": loc_str,
         "experience": "0-2 years" if job_for in ["intern", "fresher"] else "Not Specified",
-        "jobType": normalize_job_type(str(job_type_raw)) if job_type_raw else "Full-Time",
+        "jobType": job_type,
         "salary": salary,
         "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
@@ -133,10 +138,20 @@ def parse_job(raw: dict) -> dict:
         "responsibilities": "Not Specified",
         "applyLink": apply_link,
         "featuredImage": logo or "",
+        "companyLogo": logo or "",
         "source": "wellfound",
         "jobFor": job_for,
         "country": "India",
-        "category": "",
+        "category": startup.get("markets", [""])[0] if startup.get("markets") else "",
+        "workMode": normalize_work_mode(loc_str, job_type),
+        "functionalArea": infer_functional_area(title, "", description_text),
+        "industry": infer_industry(company_name, startup.get("markets", [""])[0] if startup.get("markets") else "", title),
+        "educationRequirement": extract_education(description_text),
+        "noticePeriod": "Not Specified",
+        "totalOpenings": "Not Specified",
+        "benefits": "",
+        "aboutCompany": clean_html(startup.get("productDesc", "") or "")[:500],
+        "notificationTitle": f"New Job at {company_name}",
         "rawPostedDate": raw.get("posted_at") or raw.get("createdAt") or raw.get("updated_at") or "",
     }
 

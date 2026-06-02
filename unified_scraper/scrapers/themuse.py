@@ -10,6 +10,7 @@ import time
 from normalizer import (
     normalize_job_type, classify_job_for,
     clean_html, normalize_location, normalize_skills,
+    normalize_work_mode, extract_education, infer_functional_area, infer_industry,
 )
 
 SOURCE = "themuse"
@@ -85,22 +86,37 @@ def parse_job(raw: dict) -> dict:
         elif "director" in ll or "vp" in ll or "head" in ll:
             exp = "10+ years"
 
+    job_type = "Internship" if job_for == "intern" else "Full-Time"
+    company_name = company or "Not Specified"
+    logo = company_data.get("refs", {}).get("logo_image", "") if isinstance(company_data.get("refs"), dict) else ""
+    country_val = "Remote" if is_remote else "USA"
+
     return {
         "title": title,
-        "company": company or "Not Specified",
+        "company": company_name,
         "location": location,
         "experience": exp,
-        "jobType": "Internship" if job_for == "intern" else "Full-Time",
+        "jobType": job_type,
         "salary": "Not Disclosed",
         "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
         "preferredSkills": "Not Specified",
         "responsibilities": "Not Specified",
         "applyLink": apply_link,
-        "featuredImage": company_data.get("refs", {}).get("logo_image", "") if isinstance(company_data.get("refs"), dict) else "",
+        "featuredImage": logo,
+        "companyLogo": logo,
         "source": "themuse",
         "jobFor": job_for,
-        "country": "Remote" if is_remote else "USA",
+        "country": country_val,
+        "workMode": "Remote" if is_remote else "On-site",
+        "functionalArea": infer_functional_area(title, category, description_text),
+        "industry": infer_industry(company_name, category, title),
+        "educationRequirement": extract_education(description_text),
+        "noticePeriod": "Not Specified",
+        "totalOpenings": "Not Specified",
+        "benefits": "",
+        "aboutCompany": "",
+        "notificationTitle": f"Remote Job at {company_name}" if is_remote else f"New Job at {company_name}",
         "_is_remote": is_remote,
         "category": category,
         "rawPostedDate": publication_date,

@@ -9,6 +9,7 @@ import time
 from normalizer import (
     normalize_job_type, classify_job_for,
     clean_html, normalize_location, build_description,
+    normalize_work_mode, extract_education, infer_functional_area, infer_industry,
 )
 
 SOURCE = "freshteam"
@@ -144,6 +145,7 @@ def parse_job(raw: dict, company_name: str, subdomain: str) -> dict:
         location=loc_str,
     )
 
+    dept_str = str(department)
     return {
         "title": title,
         "company": company_name,
@@ -160,7 +162,16 @@ def parse_job(raw: dict, company_name: str, subdomain: str) -> dict:
         "source": f"freshteam/{subdomain}",
         "jobFor": job_for,
         "country": "India",
-        "category": str(department),
+        "category": dept_str,
+        "workMode": normalize_work_mode(loc_str, job_type),
+        "functionalArea": infer_functional_area(title, dept_str, description_text),
+        "industry": infer_industry(company_name, dept_str, title),
+        "educationRequirement": extract_education(requirements_text + " " + description_text),
+        "noticePeriod": "Not Specified",
+        "totalOpenings": "Not Specified",
+        "benefits": "",
+        "aboutCompany": "",
+        "notificationTitle": f"New Job at {company_name}",
         "rawPostedDate": raw.get("updated_at") or raw.get("created_at") or "",
     }
 

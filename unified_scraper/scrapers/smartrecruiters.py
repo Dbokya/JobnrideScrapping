@@ -8,6 +8,7 @@ import time
 from normalizer import (
     normalize_job_type, classify_job_for,
     clean_html, normalize_location, build_description,
+    normalize_work_mode, extract_education, infer_functional_area, infer_industry,
 )
 
 SOURCE = "smartrecruiters"
@@ -135,10 +136,12 @@ def parse_job(raw: dict, company_name: str, company_id: str) -> dict:
         location=location or "India",
     )
 
+    loc_str = location or "India"
+    dept_str = str(department)
     return {
         "title": title,
         "company": company_name,
-        "location": location or "India",
+        "location": loc_str,
         "experience": "0-2 years" if job_for in ["intern", "fresher"] else "Not Specified",
         "jobType": job_type,
         "salary": "Not Disclosed",
@@ -151,7 +154,16 @@ def parse_job(raw: dict, company_name: str, company_id: str) -> dict:
         "source": f"smartrecruiters/{company_name.lower().replace(' ', '_')}",
         "jobFor": job_for,
         "country": country or "India",
-        "category": str(department),
+        "category": dept_str,
+        "workMode": normalize_work_mode(loc_str, job_type),
+        "functionalArea": infer_functional_area(title, dept_str, description_text),
+        "industry": infer_industry(company_name, dept_str, title),
+        "educationRequirement": extract_education(requirements_text + " " + description_text),
+        "noticePeriod": "Not Specified",
+        "totalOpenings": "Not Specified",
+        "benefits": "",
+        "aboutCompany": "",
+        "notificationTitle": f"New Job at {company_name}",
         "rawPostedDate": raw.get("releasedDate") or raw.get("updatedOn") or raw.get("createdon") or "",
     }
 

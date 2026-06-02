@@ -8,6 +8,7 @@ import time
 from normalizer import (
     normalize_experience, normalize_job_type, classify_job_for,
     clean_html, normalize_location, normalize_skills,
+    normalize_work_mode, extract_education, infer_functional_area, infer_industry,
 )
 
 SOURCE = "workday"
@@ -119,12 +120,15 @@ def parse_job(raw: dict, company_name: str, tenant: str, wd_ver: int, board: str
 
     job_for = classify_job_for(title, description_text)
 
+    job_type = normalize_job_type(str(job_type_raw))
+    category_str = str(category)
+
     return {
         "title": title,
         "company": company_name,
         "location": location,
         "experience": "0-2 years" if job_for in ["intern", "fresher"] else "Not Specified",
-        "jobType": normalize_job_type(str(job_type_raw)),
+        "jobType": job_type,
         "salary": "Not Disclosed",
         "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
@@ -135,7 +139,16 @@ def parse_job(raw: dict, company_name: str, tenant: str, wd_ver: int, board: str
         "source": f"workday/{company_name.lower().replace(' ', '_')}",
         "jobFor": job_for,
         "country": "India",
-        "category": str(category),
+        "category": category_str,
+        "workMode": normalize_work_mode(location, job_type),
+        "functionalArea": infer_functional_area(title, category_str, description_text),
+        "industry": infer_industry(company_name, category_str, title),
+        "educationRequirement": extract_education(description_text),
+        "noticePeriod": "Not Specified",
+        "totalOpenings": "Not Specified",
+        "benefits": "",
+        "aboutCompany": "",
+        "notificationTitle": f"New Job at {company_name}",
         "rawPostedDate": raw.get("postedOn") or raw.get("startDate") or "",
     }
 

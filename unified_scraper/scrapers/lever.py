@@ -8,7 +8,8 @@ import time
 from normalizer import (
     normalize_experience, normalize_job_type, classify_job_for,
     clean_html, normalize_location, normalize_salary, normalize_skills,
-    build_description,
+    build_description, normalize_work_mode, extract_education,
+    infer_functional_area, infer_industry,
 )
 
 SOURCE = "lever"
@@ -110,6 +111,7 @@ def parse_job(raw: dict, company_slug: str) -> dict:
         location=loc_str,
     )
 
+    skills_str = normalize_skills(skills)
     return {
         "title": title,
         "company": company_name,
@@ -119,7 +121,7 @@ def parse_job(raw: dict, company_slug: str) -> dict:
         "salary": "Not Disclosed",
         "description": full_description,
         "requirements": requirements or "Not Specified",
-        "preferredSkills": normalize_skills(skills),
+        "preferredSkills": skills_str,
         "responsibilities": responsibilities or "Not Specified",
         "applyLink": apply_link,
         "featuredImage": "",
@@ -127,6 +129,15 @@ def parse_job(raw: dict, company_slug: str) -> dict:
         "jobFor": job_for,
         "country": "",
         "category": team,
+        "workMode": normalize_work_mode(loc_str, commitment),
+        "functionalArea": infer_functional_area(title, team, description_text),
+        "industry": infer_industry(company_name, team, title),
+        "educationRequirement": extract_education(requirements + " " + description_text),
+        "noticePeriod": "Not Specified",
+        "totalOpenings": "Not Specified",
+        "benefits": "",
+        "aboutCompany": "",
+        "notificationTitle": f"New Job at {company_name}",
         "rawPostedDate": raw.get("createdAt") or raw.get("updatedAt") or "",
     }
 

@@ -10,6 +10,7 @@ import time
 from normalizer import (
     normalize_job_type, classify_job_for,
     clean_html, normalize_location, normalize_salary,
+    normalize_work_mode, extract_education, infer_functional_area, infer_industry,
 )
 
 SOURCE = "adzuna"
@@ -92,12 +93,15 @@ def parse_job(raw: dict, country_name: str) -> dict:
 
     job_for = classify_job_for(title, description_text)
 
+    job_type = normalize_job_type(contract_type or contract_time)
+    company_name = company or "Not Specified"
+
     return {
         "title": title,
-        "company": company or "Not Specified",
+        "company": company_name,
         "location": location,
         "experience": "0-2 years" if job_for in ["intern", "fresher"] else "Not Specified",
-        "jobType": normalize_job_type(contract_type or contract_time),
+        "jobType": job_type,
         "salary": salary,
         "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
@@ -109,6 +113,15 @@ def parse_job(raw: dict, country_name: str) -> dict:
         "jobFor": job_for,
         "country": country_name,
         "category": category,
+        "workMode": normalize_work_mode(location, job_type),
+        "functionalArea": infer_functional_area(title, category, description_text),
+        "industry": infer_industry(company_name, category, title),
+        "educationRequirement": extract_education(description_text),
+        "noticePeriod": "Not Specified",
+        "totalOpenings": "Not Specified",
+        "benefits": "",
+        "aboutCompany": "",
+        "notificationTitle": f"New Job at {company_name}",
         "rawPostedDate": raw.get("created") or raw.get("date") or "",
     }
 

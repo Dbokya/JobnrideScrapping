@@ -319,6 +319,118 @@ def is_it_job(title: str, description: str = "", category: str = "") -> bool:
     return any(kw in text for kw in IT_KEYWORDS)
 
 
+def normalize_work_mode(location: str, job_type: str = "") -> str:
+    """Extract Remote / Hybrid / On-site from location and job type."""
+    loc = (location or "").lower()
+    jt = (job_type or "").lower()
+    combined = f"{loc} {jt}"
+    if "hybrid" in combined:
+        return "Hybrid"
+    if any(w in combined for w in ["remote", "work from home", "wfh", "worldwide", "anywhere", "global"]):
+        return "Remote"
+    return "On-site"
+
+
+def extract_education(text: str) -> str:
+    """Extract education requirement from job description text."""
+    if not text:
+        return "Not Specified"
+    t = text.lower()
+    PATTERNS = [
+        (r"\bphd\b|\bdoctorate\b|\bd\.?phil\b", "PhD"),
+        (r"\bm\.?tech\b|\bm\.?e\.?\b|\bmaster.{0,20}(tech|engineer)", "M.Tech / M.E."),
+        (r"\bmba\b|\bmaster.{0,15}business", "MBA"),
+        (r"\bmsc\b|\bm\.?sc\.?\b|\bmaster.{0,15}science", "M.Sc."),
+        (r"\bmca\b|\bmaster.{0,20}computer", "MCA"),
+        (r"\bm\.?s\b|\bmaster.{0,10}(science|arts|engineering)\b", "Master's Degree"),
+        (r"\bb\.?tech\b|\bb\.?e\.?\b|\bbachelor.{0,20}(tech|engineer)", "B.Tech / B.E."),
+        (r"\bbca\b|\bbachelor.{0,20}computer application", "BCA"),
+        (r"\bbsc\b|\bb\.?sc\.?\b|\bbachelor.{0,15}science", "B.Sc."),
+        (r"\bbba\b|\bbachelor.{0,15}(business|commerce)", "BBA / B.Com"),
+        (r"\bany\s+graduate\b|\bany\s+degree\b|\bgraduat", "Any Graduate"),
+        (r"\bpostgraduate\b|\bpost.?grad", "Post Graduate"),
+        (r"\bdiploma\b", "Diploma"),
+    ]
+    for pattern, label in PATTERNS:
+        if re.search(pattern, t):
+            return label
+    return "Not Specified"
+
+
+def infer_functional_area(title: str, category: str = "", description: str = "") -> str:
+    """Infer functional area / department from job title and category."""
+    text = f"{title} {category} {description[:100]}".lower()
+    if re.search(r"\bmachine.?learning\b|\bml.?engineer\b|\bai.?engineer\b|\bdeep.?learning\b|\bllm\b|\bgen.?ai\b", text):
+        return "AI / Machine Learning"
+    if re.search(r"\bdata.?scientist\b|\bdata.?analyst\b|\banalytic\b|\bbi.?developer\b|\bbusiness.?intelligence\b", text):
+        return "Data & Analytics"
+    if re.search(r"\bdata.?engineer\b|\betl\b|\bspark\b|\bkafka\b|\bairflow\b|\bdatabrick\b", text):
+        return "Data Engineering"
+    if re.search(r"\bdevops\b|\bsre\b|\bsite.?reliability\b|\binfrastructure\b|\bplatform.?engineer\b", text):
+        return "DevOps & Infrastructure"
+    if re.search(r"\bcloud.?engineer\b|\baws.?engineer\b|\bazure.?engineer\b|\bgcp\b", text):
+        return "Cloud Engineering"
+    if re.search(r"\bmobile\b|\bandroid\b|\bios\b|\bflutter\b|\breact.?native\b|\bswift\b|\bkotlin\b", text):
+        return "Mobile Development"
+    if re.search(r"\bfrontend\b|\bfront.?end\b|\bui.?developer\b|\breact\b|\bangular\b|\bvue\b", text):
+        return "Frontend Development"
+    if re.search(r"\bbackend\b|\bback.?end\b|\bnode\.?js\b|\bdjango\b|\bspring\b|\brails\b|\bapi\b", text):
+        return "Backend Development"
+    if re.search(r"\bfull.?stack\b", text):
+        return "Full Stack Development"
+    if re.search(r"\bqa\b|\bquality.?assurance\b|\btester\b|\btest.?engineer\b|\bsdet\b|\bautomation.?test\b", text):
+        return "Quality Assurance"
+    if re.search(r"\bsecurity\b|\bcybersecur\b|\binfosec\b|\bpenetration\b|\bdevsecops\b", text):
+        return "Cybersecurity"
+    if re.search(r"\bproduct.?manager\b|\bproduct.?owner\b|\bpm\b|\bprogram.?manager\b", text):
+        return "Product Management"
+    if re.search(r"\bdesigner\b|\bux\b|\bui/ux\b|\binteraction.?design\b|\bvisual.?design\b", text):
+        return "Design"
+    if re.search(r"\btech.?lead\b|\beng.*?manager\b|\bstaff.?eng\b|\bprincipal.?eng\b|\bvp.?eng\b|\bdirector.?eng\b", text):
+        return "Engineering Leadership"
+    if re.search(r"\bdba\b|\bdatabase.?admin\b|\bsql.?admin\b|\bpostgres\b", text):
+        return "Database Administration"
+    if re.search(r"\bsap\b|\berp\b|\boracle.?dba\b|\bsalesforce\b|\bcrm\b", text):
+        return "ERP / CRM"
+    if re.search(r"\bengineer\b|\bdeveloper\b|\bprogrammer\b|\bcoder\b|\bsde\b|\bswe\b", text):
+        return "Software Engineering"
+    return "Information Technology"
+
+
+def infer_industry(company: str, category: str = "", title: str = "") -> str:
+    """Infer industry sector from company name, category and job title."""
+    text = f"{company} {category} {title}".lower()
+    if re.search(r"\bfintech\b|\bbank\b|\bfinance\b|\bpayment\b|\binsur\b|\blend\b|\binvest\b|\btrading\b|\bwealth\b|\bstock\b|\bnbfc\b|\bneobank\b", text):
+        return "Fintech / Finance"
+    if re.search(r"\bhealth\b|\bpharma\b|\bmedical\b|\bhospital\b|\bclinic\b|\bhealthcare\b|\bdiagnostic\b", text):
+        return "Healthcare & Pharma"
+    if re.search(r"\bedtech\b|\beducation\b|\blearning\b|\bschool\b|\buniversit\b|\bcourse\b|\btutor\b|\bcoach\b", text):
+        return "EdTech / Education"
+    if re.search(r"\becomm\b|\be-comm\b|\bretail\b|\bshopping\b|\bmarketplace\b|\bfashion\b|\bbeauty\b", text):
+        return "E-commerce / Retail"
+    if re.search(r"\blogistic\b|\bdelivery\b|\bshipping\b|\btransport\b|\bsupply.?chain\b|\bwarehouse\b|\bfreight\b", text):
+        return "Logistics & Supply Chain"
+    if re.search(r"\bgaming\b|\bgame\b|\besport\b", text):
+        return "Gaming"
+    if re.search(r"\bmedia\b|\bcontent\b|\bnews\b|\bpublish\b|\bott\b|\bstream\b|\bpodcast\b", text):
+        return "Media & Content"
+    if re.search(r"\btravel\b|\bhospitalit\b|\bhotel\b|\btourism\b|\bairline\b|\bflight\b", text):
+        return "Travel & Hospitality"
+    if re.search(r"\breal.?estate\b|\bproptech\b|\bproperty\b|\bhome.?loan\b", text):
+        return "Real Estate / PropTech"
+    if re.search(r"\bagritech\b|\bagriculture\b|\bfarm\b|\bfood.?tech\b|\bfmcg\b", text):
+        return "AgriTech / FoodTech"
+    if re.search(r"\bhr.?tech\b|\bhrms\b|\brecruit\b|\btalent\b", text):
+        return "HR Tech"
+    if re.search(r"\bev\b|\belectric.?vehicle\b|\bautotech\b|\bautomotive\b", text):
+        return "Automotive / EV"
+    if re.search(r"\bsaas\b|\bsoftware\b|\bcloud\b|\bplatform\b|\bdev.?tools\b|\binfosys\b|\bwipro\b|\btcs\b|\bhcl\b|\bcognizant\b|\btech.?mahindra\b|\baccenture\b|\bcapgemini\b", text):
+        return "IT Services / SaaS"
+    if re.search(r"\bai\b|\bml\b|\bmachine.?learning\b|\bartificial.?intel\b", text):
+        return "AI / ML"
+    return "Information Technology"
+
+
 def normalize_skills(skills) -> str:
     if not skills:
         return "Not Specified"

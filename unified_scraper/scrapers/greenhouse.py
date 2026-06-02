@@ -8,7 +8,8 @@ import time
 from normalizer import (
     normalize_experience, normalize_job_type, classify_job_for,
     clean_html, normalize_location, normalize_salary, normalize_skills,
-    build_description,
+    build_description, normalize_work_mode, extract_education,
+    infer_functional_area, infer_industry,
 )
 
 SOURCE = "greenhouse"
@@ -117,14 +118,17 @@ def parse_job(raw: dict, company_slug: str) -> dict:
         "0-2 years" if job_for in ["intern", "fresher"] else "Not Specified"
     )
 
+    job_type = normalize_job_type(job_type_raw) if job_type_raw else (
+        "Internship" if job_for == "intern" else "Full-Time"
+    )
+    dept = departments[0].get("name", "") if departments else ""
+
     return {
         "title": title,
         "company": company_name,
         "location": location,
         "experience": experience,
-        "jobType": normalize_job_type(job_type_raw) if job_type_raw else (
-            "Internship" if job_for == "intern" else "Full-Time"
-        ),
+        "jobType": job_type,
         "salary": normalize_salary(salary_raw),
         "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
@@ -135,7 +139,16 @@ def parse_job(raw: dict, company_slug: str) -> dict:
         "source": f"greenhouse/{company_slug}",
         "jobFor": job_for,
         "country": "",
-        "category": departments[0].get("name", "") if departments else "",
+        "category": dept,
+        "workMode": normalize_work_mode(location, job_type),
+        "functionalArea": infer_functional_area(title, dept, description_text),
+        "industry": infer_industry(company_name, dept, title),
+        "educationRequirement": extract_education(description_text),
+        "noticePeriod": "Not Specified",
+        "totalOpenings": "Not Specified",
+        "benefits": "",
+        "aboutCompany": "",
+        "notificationTitle": f"New Job at {company_name}",
         "rawPostedDate": raw.get("updated_at") or raw.get("created_at") or "",
     }
 

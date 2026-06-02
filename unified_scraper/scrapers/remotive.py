@@ -8,6 +8,7 @@ import time
 from normalizer import (
     normalize_job_type, classify_job_for,
     clean_html, normalize_salary, normalize_skills,
+    normalize_work_mode, extract_education, infer_functional_area, infer_industry,
 )
 
 SOURCE = "remotive"
@@ -54,23 +55,37 @@ def parse_job(raw: dict) -> dict:
 
     job_for = classify_job_for(title, description_text)
 
+    job_type = normalize_job_type(job_type_raw) if job_type_raw else "Remote"
+    loc_str = f"{location} (Remote)"
+    skills_str = normalize_skills(tags)
+
     return {
         "title": title,
         "company": company,
-        "location": f"{location} (Remote)",
+        "location": loc_str,
         "experience": "0-2 years" if job_for in ["intern", "fresher"] else "Not Specified",
-        "jobType": normalize_job_type(job_type_raw) if job_type_raw else "Remote",
+        "jobType": job_type,
         "salary": normalize_salary(salary_raw),
         "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
-        "preferredSkills": normalize_skills(tags),
+        "preferredSkills": skills_str,
         "responsibilities": "Not Specified",
         "applyLink": apply_link,
         "featuredImage": logo or "",
+        "companyLogo": logo or "",
         "source": "remotive",
         "jobFor": job_for,
         "country": "Remote",
         "category": category,
+        "workMode": "Remote",
+        "functionalArea": infer_functional_area(title, category, description_text),
+        "industry": infer_industry(company, category, title),
+        "educationRequirement": extract_education(description_text),
+        "noticePeriod": "Not Specified",
+        "totalOpenings": "Not Specified",
+        "benefits": "",
+        "aboutCompany": "",
+        "notificationTitle": f"Remote Job at {company}",
         "rawPostedDate": raw.get("publication_date") or raw.get("created_at") or "",
     }
 
