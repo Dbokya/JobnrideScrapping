@@ -11,6 +11,9 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: unified_scraper
 
     steps:
       - name: Checkout code
@@ -21,6 +24,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: unified_scraper/requirements.txt
 
       - name: Install dependencies
         run: pip install -r requirements.txt
