@@ -105,39 +105,33 @@ def run():
             print(f"\n❌ {source_name} scraper crashed: {e}")
             source_counts[source_name] = 0
 
-    print(f"\n{'=' * 70}")
-    print(f"📦 Total collected across all sources : {len(all_jobs)}")
+    n_fetched   = len(all_jobs)
 
-    # ── TODAY filter — only keep jobs posted today (IST) ─────────────────────
-    before_date = len(all_jobs)
+    # ── TODAY filter ─────────────────────────────────────────────────────────
     all_jobs = [j for j in all_jobs if is_posted_today(j.get("rawPostedDate", ""))]
-    dropped_date = before_date - len(all_jobs)
-    print(f"📅 Today's jobs only ({today_ist()})        : {len(all_jobs)} (dropped {dropped_date} older jobs)")
+    n_today     = len(all_jobs)
 
-    # ── India + Remote filter ────────────────────────────────────────────────
-    before_loc = len(all_jobs)
+    # ── India + Remote filter ─────────────────────────────────────────────────
     all_jobs = [
         j for j in all_jobs
         if is_india_or_remote(j.get("country", ""), j.get("location", ""))
     ]
-    print(f"🇮🇳 India + Remote only                  : {len(all_jobs)} (dropped {before_loc - len(all_jobs)} other-country jobs)")
+    n_location  = len(all_jobs)
 
     # ── English language filter ───────────────────────────────────────────────
-    before_lang = len(all_jobs)
     all_jobs = [
         j for j in all_jobs
         if is_english(j.get("title", ""), j.get("description", ""))
     ]
-    print(f"🔤 English language only                 : {len(all_jobs)} (dropped {before_lang - len(all_jobs)} non-English jobs)")
+    n_english   = len(all_jobs)
 
     # ── IT filter ────────────────────────────────────────────────────────────
     if FILTER_IT_ONLY:
-        before = len(all_jobs)
         all_jobs = [
             j for j in all_jobs
             if is_it_job(j.get("title", ""), j.get("description", ""), j.get("category", ""))
         ]
-        print(f"🔍 After IT filter                    : {len(all_jobs)} (removed {before - len(all_jobs)} non-IT jobs)")
+    n_it        = len(all_jobs)
 
     # ── Deduplicate within this batch (same applyLink) ───────────────────────
     seen_links = set()
@@ -150,8 +144,7 @@ def run():
             seen_links.add(link)
         unique_jobs.append(job)
 
-    print(f"🔁 After in-batch dedup               : {len(unique_jobs)} unique jobs")
-    print(f"{'=' * 70}")
+    n_unique    = len(unique_jobs)
 
     # ── Sort: India → Remote → Other ─────────────────────────────────────────
     def _is_india(j):
@@ -179,7 +172,8 @@ def run():
     remote_jobs = [j for j in unique_jobs if _is_remote(j) and not _is_india(j)]
     other_jobs  = [j for j in unique_jobs if not _is_india(j) and not _is_remote(j)]
     sorted_jobs = india_jobs + remote_jobs + other_jobs
-    print(f"🇮🇳 India: {len(india_jobs)}  |  🌐 Remote: {len(remote_jobs)}  |  🌍 Other: {len(other_jobs)}")
+    n_india  = len(india_jobs)
+    n_remote = len(remote_jobs)
 
     # ── Save to Firebase ─────────────────────────────────────────────────────
     print(f"\n{'=' * 70}")
@@ -191,15 +185,19 @@ def run():
     error_count = 0
     last_saved_title = None
     last_saved_company = None
+    source_saved: dict = {}   # top-level source name → saved count
 
     for job in sorted_jobs:
         try:
             saved = save_job(job, job_counter)
+            # Normalize source key: "workday/infosys" → "workday"
+            src_key = job.get("source", "unknown").split("/")[0]
             if saved:
                 job_counter += 1
                 saved_count += 1
                 last_saved_title = job.get("title", "")
                 last_saved_company = job.get("company", "")
+                source_saved[src_key] = source_saved.get(src_key, 0) + 1
             else:
                 skipped_count += 1
         except Exception as e:
@@ -225,25 +223,31 @@ def run():
     elapsed = round(time.time() - start_time, 1)
 
     print(f"\n{'=' * 70}")
-    print("📊 FINAL SUMMARY")
+    print("📊 JOBNRIDE SCRAPER — FINAL REPORT")
+    print(f"   Date : {today_ist()}  |  Run time : {elapsed}s")
     print(f"{'=' * 70}")
-    print(f"   Date (IST)         : {today_ist()}")
-    print(f"   Run Time           : {elapsed}s")
-    print(f"   After Today Filter : (today only)")
-    print(f"   After India+Remote : (filtered)")
-    print(f"   After English Flt  : (filtered)")
-    print(f"   After IT Filter    : {len(unique_jobs)}")
-    print(f"   🇮🇳 India Jobs     : {len(india_jobs)}")
-    print(f"   🌐 Remote Jobs     : {len(remote_jobs)}")
-    print(f"   🌍 Other           : {len(other_jobs)}")
-    print(f"   ✅ Saved to DB     : {saved_count}")
-    print(f"   ⏭️  Skipped (dup)  : {skipped_count}")
-    print(f"   ❌ Errors          : {error_count}")
+    print(f"   {'STEP':<38} {'JOBS':>6}")
+    print(f"   {'-'*45}")
+    print(f"   {'Fetched from all sources':<38} {n_fetched:>6}")
+    print(f"   {'After today-only filter':<38} {n_today:>6}  (-{n_fetched - n_today})")
+    print(f"   {'After India + Remote filter':<38} {n_location:>6}  (-{n_today - n_location})")
+    print(f"   {'After English-only filter':<38} {n_english:>6}  (-{n_location - n_english})")
+    print(f"   {'After IT-only filter':<38} {n_it:>6}  (-{n_english - n_it})")
+    print(f"   {'After dedup':<38} {n_unique:>6}  (-{n_it - n_unique})")
+    print(f"   {'  🇮🇳  India jobs ready':<38} {n_india:>6}")
+    print(f"   {'  🌐  Remote jobs ready':<38} {n_remote:>6}")
     print(f"{'=' * 70}")
-    print("   Per-source:")
-    for src, count in source_counts.items():
-        flag = "🇮🇳" if src in INDIA_FIRST_SOURCES else "🌍"
-        print(f"     {flag} {src:<18}: {count} jobs fetched")
+    print(f"   {'✅  NEW JOBS ADDED TO FIREBASE':<38} {saved_count:>6}")
+    print(f"   {'⏭️   Skipped (already in DB)':<38} {skipped_count:>6}")
+    print(f"   {'❌  Errors':<38} {error_count:>6}")
+    print(f"{'=' * 70}")
+    print(f"\n   {'SOURCE':<22} {'FETCHED':>8}  {'SAVED':>6}  {'TYPE'}")
+    print(f"   {'-'*52}")
+    for src, fetched in source_counts.items():
+        saved_n  = source_saved.get(src, 0)
+        src_type = "🇮🇳 India" if src in INDIA_FIRST_SOURCES else "🌐 Remote"
+        status   = f"+{saved_n}" if saved_n else "—"
+        print(f"   {src:<22} {fetched:>8}  {status:>6}  {src_type}")
     print(f"{'=' * 70}\n")
 
 
