@@ -15,7 +15,7 @@ from normalizer import is_it_job, is_posted_today, today_ist, is_india_or_remote
 from scrapers import (
     greenhouse, lever, ashby,
     workday, smartrecruiters, freshteam, wellfound,
-    remotive, arbeitnow, himalayas,
+    remotive, arbeitnow, himalayas, remoteok,
     adzuna, themuse,
 )
 
@@ -32,10 +32,11 @@ SOURCES = {
     "greenhouse":       True,   # Swiggy, Stripe, Notion, Freshworks...
     "lever":            True,   # PhonePe, Groww, Atlassian, Canva...
     "ashby":            True,   # Linear, Vercel, Anthropic, Cursor...
-    # Global remote boards
+    # Global remote boards (any company, fully remote)
     "remotive":         True,   # Remote jobs worldwide
-    "arbeitnow":        True,   # EU + Remote
+    "arbeitnow":        True,   # Remote-only (filtered)
     "himalayas":        True,   # Remote-first with salary
+    "remoteok":         True,   # Any company, fully remote (remoteok.com)
     # Optional (need free API keys)
     "adzuna":           True,   # India + 6 other countries (needs ADZUNA_APP_ID/KEY)
     "themuse":          True,   # US companies
@@ -52,6 +53,7 @@ SCRAPER_MAP = {
     "remotive":        remotive.scrape,
     "arbeitnow":       arbeitnow.scrape,
     "himalayas":       himalayas.scrape,
+    "remoteok":        remoteok.scrape,
     "adzuna":          adzuna.scrape,
     "themuse":         themuse.scrape,
 }

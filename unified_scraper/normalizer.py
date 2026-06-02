@@ -45,18 +45,24 @@ NON_INDIA_LOCATION_KEYWORDS = {
 
 
 def is_india_or_remote(country: str, location: str) -> bool:
-    """Returns True if job is India-based or remote/worldwide."""
+    """Returns True if job is India-based or remote/worldwide.
+    Remote location always wins — a remote job at a US company is valid.
+    """
     country_l = (country or "").lower().strip()
     location_l = (location or "").lower()
 
+    # Remote/worldwide in location always passes, regardless of country
+    if any(kw in location_l for kw in REMOTE_LOCATION_KEYWORDS):
+        return True
+
     if country_l in ("india", "in"):
         return True
-    if country_l in ("remote", "worldwide", "global", ""):
-        pass  # need location check
-    elif country_l in NON_INDIA_COUNTRIES:
+    if country_l in ("remote", "worldwide", "global"):
+        return True
+    if country_l in NON_INDIA_COUNTRIES:
         return False
 
-    # Check location for India/remote keywords
+    # Empty/unknown country: check location for India city names
     if any(kw in location_l for kw in INDIA_LOCATION_KEYWORDS):
         return True
     if any(kw in location_l for kw in NON_INDIA_LOCATION_KEYWORDS):
