@@ -8,7 +8,7 @@ import time
 from normalizer import (
     normalize_experience, normalize_job_type, classify_job_for,
     clean_html, normalize_location, normalize_salary, normalize_skills,
-    build_description
+    build_description,
 )
 
 SOURCE = "greenhouse"
@@ -126,7 +126,7 @@ def parse_job(raw: dict, company_slug: str) -> dict:
             "Internship" if job_for == "intern" else "Full-Time"
         ),
         "salary": normalize_salary(salary_raw),
-        "description": description_text[:2000] if description_text else "No description available.",
+        "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
         "preferredSkills": "Not Specified",
         "responsibilities": "Not Specified",

@@ -56,7 +56,7 @@ def parse_job(raw: dict) -> dict:
         "experience": "0-2 years" if job_for in ["intern", "fresher"] else "Not Specified",
         "jobType": normalize_job_type(job_type_raw),
         "salary": "Not Disclosed",
-        "description": description_text[:2000] if description_text else "No description available.",
+        "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
         "preferredSkills": normalize_skills(tags),
         "responsibilities": "Not Specified",
@@ -72,7 +72,7 @@ def parse_job(raw: dict) -> dict:
 
 def scrape() -> list:
     all_jobs = []
-    print(f"\n🇪🇺 Arbeitnow: Fetching EU + Remote jobs...")
+    print(f"\n🌐 Arbeitnow: Fetching Remote jobs (remote=True only)...")
     for page in range(1, MAX_PAGES + 1):
         raw_jobs = fetch_page(page)
         if not raw_jobs:
@@ -80,6 +80,9 @@ def scrape() -> list:
         print(f"  ✓ Page {page}: {len(raw_jobs)} jobs")
         for raw in raw_jobs:
             try:
+                # Only include remote jobs — skip EU on-site roles
+                if not raw.get("remote", False):
+                    continue
                 job = parse_job(raw)
                 if job["title"] and job["company"] and job["applyLink"]:
                     all_jobs.append(job)

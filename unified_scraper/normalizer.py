@@ -4,6 +4,96 @@ import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
 
+# ── Location helpers ──────────────────────────────────────────────────────────
+
+INDIA_LOCATION_KEYWORDS = {
+    "india", "bangalore", "bengaluru", "mumbai", "pune", "hyderabad",
+    "chennai", "delhi", "new delhi", "noida", "gurgaon", "gurugram",
+    "kolkata", "ahmedabad", "jaipur", "kochi", "trivandrum", "coimbatore",
+    "chandigarh", "indore", "bhopal", "nagpur", "surat", "vizag",
+    "visakhapatnam", "lucknow", "patna", "bhubaneswar", "remote",
+    "worldwide", "global", "anywhere", "work from home", "wfh",
+}
+
+REMOTE_LOCATION_KEYWORDS = {"remote", "worldwide", "global", "anywhere", "work from home", "wfh", "flexible"}
+
+NON_INDIA_COUNTRIES = {
+    "uk", "united kingdom", "gb", "usa", "united states", "us",
+    "australia", "au", "canada", "ca", "europe", "germany", "de",
+    "france", "fr", "netherlands", "nl", "singapore", "sg",
+    "uae", "united arab emirates", "ae", "brazil", "br",
+    "japan", "jp", "china", "cn", "south korea", "kr",
+    "mexico", "mx", "spain", "es", "italy", "it", "poland", "pl",
+    "sweden", "se", "norway", "no", "denmark", "dk", "finland", "fi",
+    "switzerland", "ch", "austria", "at", "belgium", "be",
+    "new zealand", "nz", "ireland", "ie", "portugal", "pt",
+    "argentina", "ar", "colombia", "co", "chile", "cl",
+}
+
+NON_INDIA_LOCATION_KEYWORDS = {
+    "london", "berlin", "paris", "amsterdam", "toronto", "sydney",
+    "new york", "san francisco", "los angeles", "chicago", "seattle",
+    "boston", "austin", "denver", "atlanta", "miami", "dallas",
+    "washington", "philadelphia", "phoenix", "portland",
+    "germany", "france", "netherlands", "canada", "australia",
+    "united states", "united kingdom", "eu only", "europe only",
+    "hong kong", "beijing", "shanghai", "tokyo", "seoul",
+    "amsterdam", "stockholm", "oslo", "copenhagen", "helsinki",
+    "zurich", "vienna", "warsaw", "lisbon", "madrid", "barcelona",
+    "milan", "rome", "dublin", "edinburgh", "manchester",
+}
+
+
+def is_india_or_remote(country: str, location: str) -> bool:
+    """Returns True if job is India-based or remote/worldwide."""
+    country_l = (country or "").lower().strip()
+    location_l = (location or "").lower()
+
+    if country_l in ("india", "in"):
+        return True
+    if country_l in ("remote", "worldwide", "global", ""):
+        pass  # need location check
+    elif country_l in NON_INDIA_COUNTRIES:
+        return False
+
+    # Check location for India/remote keywords
+    if any(kw in location_l for kw in INDIA_LOCATION_KEYWORDS):
+        return True
+    if any(kw in location_l for kw in NON_INDIA_LOCATION_KEYWORDS):
+        return False
+
+    return True  # unknown → include
+
+
+def is_english(title: str, description: str = "") -> bool:
+    """Returns True if text is likely in English (or indeterminate)."""
+    text = f"{title} {description[:400]}"
+    if not text.strip():
+        return True
+    # Detect non-Latin script blocks (CJK, Arabic, Cyrillic, Korean, Devanagari)
+    NON_ENGLISH_RANGES = [
+        (0x0400, 0x04FF),   # Cyrillic
+        (0x0600, 0x06FF),   # Arabic
+        (0x0900, 0x097F),   # Devanagari (Hindi script)
+        (0x3040, 0x30FF),   # Japanese
+        (0x4E00, 0x9FFF),   # CJK (Chinese/Japanese)
+        (0xAC00, 0xD7AF),   # Korean
+        (0x0E00, 0x0E7F),   # Thai
+        (0x0370, 0x03FF),   # Greek
+    ]
+    non_english = sum(
+        1 for c in text
+        if any(lo <= ord(c) <= hi for lo, hi in NON_ENGLISH_RANGES)
+    )
+    if non_english > 5:
+        return False
+    # Check for German/French keyword patterns
+    de_words = re.findall(r'\b(und|oder|für|mit|die|der|das|ist|wir|werden|haben|eine|seinen|ihrer|unserer|Kenntnisse|Erfahrung)\b', text)
+    fr_words = re.findall(r'\b(et|ou|les|des|une|avec|vous|nous|est|sont|dans|pour|nous|votre|notre|équipe)\b', text)
+    if len(de_words) >= 3 or len(fr_words) >= 3:
+        return False
+    return True
+
 
 def today_ist() -> date:
     return datetime.now(IST).date()
@@ -146,16 +236,51 @@ def normalize_salary(salary: str) -> str:
         return "Not Disclosed"
     return s
 
-def build_description(raw: str, responsibilities: str = "", requirements: str = "") -> str:
+def build_description(
+    raw: str,
+    responsibilities: str = "",
+    requirements: str = "",
+    skills: str = "",
+    about_company: str = "",
+    salary: str = "",
+    job_type: str = "",
+    location: str = "",
+) -> str:
+    """Build a clean, structured job description in English."""
     parts = []
-    if raw:
-        parts.append(clean_html(raw))
-    if responsibilities and responsibilities not in ["Not Specified", ""]:
-        parts.append(f"Responsibilities: {responsibilities}")
-    if requirements and requirements not in ["Not Specified", ""]:
-        parts.append(f"Requirements: {requirements}")
+
+    # Intro / overview
+    raw_text = clean_html(raw).strip() if raw else ""
+    if raw_text:
+        # If text already contains structured sections, keep as-is
+        if any(marker in raw_text.lower() for marker in
+               ["responsibilities", "requirements", "qualifications", "about the role", "what you'll do"]):
+            parts.append(raw_text[:4000])
+        else:
+            parts.append(raw_text[:2000])
+
+    def _add_section(heading: str, content: str):
+        content = content.strip()
+        if content and content not in ("Not Specified", "N/A", "-", ""):
+            parts.append(f"**{heading}**\n{content}")
+
+    _add_section("Key Responsibilities", responsibilities)
+    _add_section("Requirements & Qualifications", requirements)
+    _add_section("Skills", skills)
+
+    # Metadata footer
+    meta = []
+    if location and location not in ("Not Specified",):
+        meta.append(f"Location: {location}")
+    if job_type and job_type not in ("Not Specified",):
+        meta.append(f"Job Type: {job_type}")
+    if salary and salary not in ("Not Disclosed", "Not Specified"):
+        meta.append(f"Salary: {salary}")
+    if meta:
+        parts.append("\n".join(meta))
+
     text = "\n\n".join(parts).strip()
-    return text[:3000] if text else "No description available."
+    return text[:5000] if text else "No description available."
 
 IT_KEYWORDS = {
     # Roles

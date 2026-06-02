@@ -8,6 +8,7 @@ import time
 from normalizer import (
     normalize_experience, normalize_job_type, classify_job_for,
     clean_html, normalize_location, normalize_salary, normalize_skills,
+    build_description,
 )
 
 SOURCE = "lever"
@@ -85,24 +86,38 @@ def parse_job(raw: dict, company_slug: str) -> dict:
     for lst in lists:
         heading = (lst.get("text") or "").lower()
         content = clean_html(lst.get("content", "") or "")
-        if any(w in heading for w in ["responsibilit", "what you'll do", "role", "duties"]):
-            responsibilities = content[:500]
-        elif any(w in heading for w in ["requirement", "qualification", "what you need", "about you"]):
-            requirements = content[:500]
-        elif any(w in heading for w in ["skill", "tech", "stack"]):
-            skills = content[:300]
+        if any(w in heading for w in ["responsibilit", "what you'll do", "role", "duties", "what you will do"]):
+            responsibilities = content[:1000]
+        elif any(w in heading for w in ["requirement", "qualification", "what you need", "about you", "must have", "you have"]):
+            requirements = content[:1000]
+        elif any(w in heading for w in ["skill", "tech", "stack", "tools", "experience"]):
+            skills = content[:500]
+
+    # Also check additional field
+    additional = clean_html(raw.get("additional", "") or "")
 
     company_name = company_slug.replace("-", " ").title()
     job_for = classify_job_for(title, description_text)
+    job_type = normalize_job_type(commitment)
+    loc_str = location or "Not Specified"
+
+    full_description = build_description(
+        raw=description_text,
+        responsibilities=responsibilities,
+        requirements=requirements,
+        skills=skills,
+        job_type=job_type,
+        location=loc_str,
+    )
 
     return {
         "title": title,
         "company": company_name,
-        "location": location or "Not Specified",
+        "location": loc_str,
         "experience": "0-2 years" if job_for in ["intern", "fresher"] else "Not Specified",
-        "jobType": normalize_job_type(commitment),
+        "jobType": job_type,
         "salary": "Not Disclosed",
-        "description": description_text[:2000] if description_text else "No description available.",
+        "description": full_description,
         "requirements": requirements or "Not Specified",
         "preferredSkills": normalize_skills(skills),
         "responsibilities": responsibilities or "Not Specified",

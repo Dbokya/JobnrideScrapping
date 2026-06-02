@@ -17,26 +17,23 @@ SOURCE = "adzuna"
 APP_ID = os.getenv("ADZUNA_APP_ID", "")
 APP_KEY = os.getenv("ADZUNA_APP_KEY", "")
 
-# Country code → country name mapping
+# India only — remote jobs appear in India results too
 COUNTRIES = {
     "in": "India",
-    "gb": "UK",
-    "us": "USA",
-    "au": "Australia",
-    "ca": "Canada",
-    "sg": "Singapore",
-    "ae": "UAE",
 }
 
 RESULTS_PER_PAGE = 50
-MAX_PAGES_PER_COUNTRY = 4  # 200 jobs per country
+MAX_PAGES_PER_COUNTRY = 5  # 250 jobs per search term
 
-# Job categories to search
+# IT job search terms for India
 SEARCH_TERMS = [
     "software engineer", "data engineer", "product manager",
     "frontend developer", "backend developer", "devops engineer",
     "data scientist", "machine learning engineer", "mobile developer",
-    "ui ux designer", "full stack developer",
+    "full stack developer", "cloud engineer", "qa engineer",
+    "solution architect", "java developer", "python developer",
+    "react developer", "node.js developer", "android developer",
+    "ios developer", "flutter developer",
 ]
 
 
@@ -102,7 +99,7 @@ def parse_job(raw: dict, country_name: str) -> dict:
         "experience": "0-2 years" if job_for in ["intern", "fresher"] else "Not Specified",
         "jobType": normalize_job_type(contract_type or contract_time),
         "salary": salary,
-        "description": description_text[:2000] if description_text else "No description available.",
+        "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
         "preferredSkills": "Not Specified",
         "responsibilities": "Not Specified",
@@ -127,7 +124,7 @@ def scrape() -> list:
 
     for country_code, country_name in COUNTRIES.items():
         country_jobs = []
-        for search in SEARCH_TERMS[:4]:  # limit searches per country to save API calls
+        for search in SEARCH_TERMS[:8]:  # up to 8 search terms for India
             for page in range(1, MAX_PAGES_PER_COUNTRY + 1):
                 raw_jobs = fetch_page(country_code, search, page)
                 if not raw_jobs:

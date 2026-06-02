@@ -11,7 +11,7 @@ from datetime import datetime
 import pytz
 
 from firebase_client import init_firebase, save_job, get_highest_api_id, send_notification
-from normalizer import is_it_job, is_posted_today, today_ist
+from normalizer import is_it_job, is_posted_today, today_ist, is_india_or_remote, is_english
 from scrapers import (
     greenhouse, lever, ashby,
     workday, smartrecruiters, freshteam, wellfound,
@@ -112,6 +112,22 @@ def run():
     dropped_date = before_date - len(all_jobs)
     print(f"📅 Today's jobs only ({today_ist()})        : {len(all_jobs)} (dropped {dropped_date} older jobs)")
 
+    # ── India + Remote filter ────────────────────────────────────────────────
+    before_loc = len(all_jobs)
+    all_jobs = [
+        j for j in all_jobs
+        if is_india_or_remote(j.get("country", ""), j.get("location", ""))
+    ]
+    print(f"🇮🇳 India + Remote only                  : {len(all_jobs)} (dropped {before_loc - len(all_jobs)} other-country jobs)")
+
+    # ── English language filter ───────────────────────────────────────────────
+    before_lang = len(all_jobs)
+    all_jobs = [
+        j for j in all_jobs
+        if is_english(j.get("title", ""), j.get("description", ""))
+    ]
+    print(f"🔤 English language only                 : {len(all_jobs)} (dropped {before_lang - len(all_jobs)} non-English jobs)")
+
     # ── IT filter ────────────────────────────────────────────────────────────
     if FILTER_IT_ONLY:
         before = len(all_jobs)
@@ -189,10 +205,12 @@ def run():
     print(f"{'=' * 70}")
     print(f"   Date (IST)         : {today_ist()}")
     print(f"   Run Time           : {elapsed}s")
-    print(f"   Jobs Collected     : {len(all_jobs)}")
     print(f"   After Today Filter : (today only)")
+    print(f"   After India+Remote : (filtered)")
+    print(f"   After English Flt  : (filtered)")
     print(f"   After IT Filter    : {len(unique_jobs)}")
     print(f"   🇮🇳 India Jobs     : {len(india_jobs)}")
+    print(f"   🌍 Remote Jobs     : {len(other_jobs)}")
     print(f"   ✅ Saved to DB     : {saved_count}")
     print(f"   ⏭️  Skipped (dup)  : {skipped_count}")
     print(f"   ❌ Errors          : {error_count}")

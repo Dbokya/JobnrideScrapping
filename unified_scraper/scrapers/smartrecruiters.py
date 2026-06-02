@@ -7,7 +7,7 @@ import requests
 import time
 from normalizer import (
     normalize_job_type, classify_job_for,
-    clean_html, normalize_location,
+    clean_html, normalize_location, build_description,
 )
 
 SOURCE = "smartrecruiters"
@@ -51,6 +51,20 @@ COMPANIES = [
 PAGE_LIMIT = 100
 
 
+def fetch_job_detail(company_id: str, job_id: str, retries: int = 2) -> dict:
+    """Fetch full job details including description from SmartRecruiters."""
+    url = f"https://api.smartrecruiters.com/v1/companies/{company_id}/postings/{job_id}"
+    for attempt in range(1, retries + 1):
+        try:
+            resp = requests.get(url, timeout=15, headers={"User-Agent": "JobNRideBot/2.0"})
+            if resp.status_code == 200:
+                return resp.json()
+            return {}
+        except requests.exceptions.RequestException:
+            time.sleep(1)
+    return {}
+
+
 def fetch_jobs(company_id: str, offset: int = 0, retries: int = 3) -> dict:
     url = f"https://api.smartrecruiters.com/v1/companies/{company_id}/postings"
     params = {"limit": PAGE_LIMIT, "offset": offset}
@@ -92,21 +106,46 @@ def parse_job(raw: dict, company_name: str, company_id: str) -> dict:
     if isinstance(department, dict):
         department = department.get("label", "")
 
+    # Fetch full job details for description
     description_text = ""
+    requirements_text = ""
+    responsibilities_text = ""
+    skills_text = ""
+
+    detail = fetch_job_detail(company_id, job_id)
+    if detail:
+        job_ad = detail.get("jobAd", {}) or {}
+        sections = job_ad.get("sections", {}) or {}
+        description_text = clean_html(sections.get("jobDescription", {}).get("text", "") or "")
+        requirements_text = clean_html(sections.get("qualifications", {}).get("text", "") or "")
+        responsibilities_text = clean_html(sections.get("additionalInformation", {}).get("text", "") or "")
+        # Also check top-level fields
+        if not description_text:
+            description_text = clean_html(detail.get("description", "") or "")
 
     job_for = classify_job_for(title, description_text)
+    job_type = normalize_job_type(str(job_type_raw))
+
+    full_description = build_description(
+        raw=description_text,
+        responsibilities=responsibilities_text,
+        requirements=requirements_text,
+        skills=skills_text,
+        job_type=job_type,
+        location=location or "India",
+    )
 
     return {
         "title": title,
         "company": company_name,
         "location": location or "India",
         "experience": "0-2 years" if job_for in ["intern", "fresher"] else "Not Specified",
-        "jobType": normalize_job_type(str(job_type_raw)),
+        "jobType": job_type,
         "salary": "Not Disclosed",
-        "description": "No description available.",
-        "requirements": "Not Specified",
-        "preferredSkills": "Not Specified",
-        "responsibilities": "Not Specified",
+        "description": full_description,
+        "requirements": requirements_text[:1000] if requirements_text else "Not Specified",
+        "preferredSkills": skills_text or "Not Specified",
+        "responsibilities": responsibilities_text[:1000] if responsibilities_text else "Not Specified",
         "applyLink": apply_link,
         "featuredImage": "",
         "source": f"smartrecruiters/{company_name.lower().replace(' ', '_')}",

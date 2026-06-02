@@ -8,7 +8,7 @@ import requests
 import time
 from normalizer import (
     normalize_job_type, classify_job_for,
-    clean_html, normalize_location,
+    clean_html, normalize_location, build_description,
 )
 
 SOURCE = "freshteam"
@@ -133,18 +133,28 @@ def parse_job(raw: dict, company_name: str, subdomain: str) -> dict:
     experience = normalize_experience(exp_raw) if exp_raw else "Not Specified"
 
     job_for = classify_job_for(title, description_text)
+    job_type = normalize_job_type(str(job_type_raw))
+    loc_str = location or "India"
+
+    full_description = build_description(
+        raw=description_text,
+        responsibilities=responsibilities_text,
+        requirements=requirements_text,
+        job_type=job_type,
+        location=loc_str,
+    )
 
     return {
         "title": title,
         "company": company_name,
-        "location": location or "India",
+        "location": loc_str,
         "experience": experience,
-        "jobType": normalize_job_type(str(job_type_raw)),
+        "jobType": job_type,
         "salary": "Not Disclosed",
-        "description": description_text[:2000] if description_text else "No description available.",
-        "requirements": requirements_text[:500] if requirements_text else "Not Specified",
+        "description": full_description,
+        "requirements": requirements_text[:1000] if requirements_text else "Not Specified",
         "preferredSkills": "Not Specified",
-        "responsibilities": responsibilities_text[:500] if responsibilities_text else "Not Specified",
+        "responsibilities": responsibilities_text[:1000] if responsibilities_text else "Not Specified",
         "applyLink": apply_link,
         "featuredImage": "",
         "source": f"freshteam/{subdomain}",

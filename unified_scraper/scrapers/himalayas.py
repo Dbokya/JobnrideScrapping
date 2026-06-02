@@ -68,7 +68,7 @@ def parse_job(raw: dict) -> dict:
         "experience": "0-2 years" if job_for in ["intern", "fresher"] else "Not Specified",
         "jobType": normalize_job_type(job_type_raw) if job_type_raw else "Remote",
         "salary": salary,
-        "description": description_text[:2000] if description_text else "No description available.",
+        "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
         "preferredSkills": normalize_skills(skills),
         "responsibilities": "Not Specified",

@@ -49,6 +49,10 @@ def parse_job(raw: dict) -> dict:
     locations = raw.get("locations", []) or []
     location_names = [loc.get("name", "") for loc in locations if loc.get("name")]
     location = normalize_location(", ".join(location_names)) if location_names else "USA"
+    is_remote = any(
+        "remote" in ln.lower() or "flexible" in ln.lower() or "anywhere" in ln.lower()
+        for ln in location_names
+    )
 
     levels = raw.get("levels", []) or []
     level_names = [l.get("name", "") for l in levels]
@@ -88,7 +92,7 @@ def parse_job(raw: dict) -> dict:
         "experience": exp,
         "jobType": "Internship" if job_for == "intern" else "Full-Time",
         "salary": "Not Disclosed",
-        "description": description_text[:2000] if description_text else "No description available.",
+        "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
         "preferredSkills": "Not Specified",
         "responsibilities": "Not Specified",
@@ -96,7 +100,8 @@ def parse_job(raw: dict) -> dict:
         "featuredImage": company_data.get("refs", {}).get("logo_image", "") if isinstance(company_data.get("refs"), dict) else "",
         "source": "themuse",
         "jobFor": job_for,
-        "country": "USA",
+        "country": "Remote" if is_remote else "USA",
+        "_is_remote": is_remote,
         "category": category,
         "rawPostedDate": publication_date,
     }
@@ -114,6 +119,9 @@ def scrape() -> list:
         for raw in raw_jobs:
             try:
                 job = parse_job(raw)
+                # Only include remote/flexible jobs from The Muse (US-based source)
+                if not job.pop("_is_remote", False):
+                    continue
                 if job["title"] and job["applyLink"]:
                     all_jobs.append(job)
             except Exception as e:
