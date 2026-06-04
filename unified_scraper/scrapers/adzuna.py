@@ -29,14 +29,14 @@ COUNTRIES = {
 RESULTS_PER_PAGE = 50
 
 # ── Quota management ─────────────────────────────────────────────────────────
-# Adzuna free tier = 250 API calls/day. The GitHub Action runs 6×/day (every
-# 4h), so each run gets a budget of ~250/6 ≈ 41 calls. To cover ALL companies
-# daily without blowing quota, the company list is ROTATED across the 6 runs:
+# Adzuna free tier = 250 API calls/day. The GitHub Action runs 4×/day (every
+# 6h), so each run gets a budget of ~250/4 ≈ 62 calls. To cover ALL companies
+# daily without blowing quota, the company list is ROTATED across the runs:
 # each run handles 1/NUM_SLOTS of COMPANY_TERMS, chosen by the clock hour, so
 # every company is searched exactly once per day.
 #   per-run calls ≈ (KEYWORD_TERMS * MAX_PAGES_KEYWORD)
 #                 + (ceil(len(COMPANY_TERMS)/NUM_SLOTS) * MAX_PAGES_COMPANY)
-NUM_SLOTS = 6           # number of scheduled runs per day (matches workflow cron)
+NUM_SLOTS = 4           # number of scheduled runs per day (MUST match workflow cron)
 MAX_PAGES_KEYWORD = 2   # 2 pages = 100 newest jobs per keyword
 MAX_PAGES_COMPANY = 1   # 1 page  = 50 newest jobs per company
 KEYWORD_TERMS = 8       # use first N keyword terms each run
