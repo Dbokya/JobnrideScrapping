@@ -79,7 +79,7 @@ def parse_job(raw: dict) -> dict:
     # RemoteOK jobs are always remote
     location = f"{location_raw} (Remote)" if "remote" not in location_raw.lower() else location_raw
 
-    skills_str = normalize_skills(tags)
+    skills_str = normalize_skills(tags) if tags else extract_skills_from_text(description_text)
     job_for = classify_job_for(title, description_text)
 
     return {

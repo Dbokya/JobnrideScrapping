@@ -9,60 +9,64 @@ from normalizer import (
     normalize_experience, normalize_job_type, classify_job_for,
     clean_html, normalize_location, normalize_salary, normalize_skills,
     build_description, normalize_work_mode, extract_education,
-    infer_functional_area, infer_industry,
+    infer_functional_area, infer_industry, extract_skills_from_text,
 )
 
 SOURCE = "greenhouse"
 
-# Company slugs — add more as needed
+# Company slugs — verified live via audit_slugs.py
 COMPANIES = [
-    # ── India IT Services ─────────────────────────────────────────────────
-    "tcs", "infosys", "wipro", "hcl", "tech-mahindra",
-    "mphasis", "hexaware", "persistent", "kpit", "ltimindtree",
-    "coforge", "zensar", "mastek", "birlasoft", "cyient",
-    "tata-elxsi", "sasken", "sonata-software", "niit-technologies",
-    # ── India Product / Startup ───────────────────────────────────────────
-    "swiggy", "zomato", "flipkart", "paytm", "phonepe",
-    "razorpay", "cred", "zepto", "meesho", "ola",
-    "nykaa", "sharechat", "dailyhunt", "oyo", "delhivery",
-    "postman", "browserstack", "freshworks", "chargebee", "clevertap",
-    "darwinbox", "hasura", "setu", "smallcase", "cashfree",
-    "moengage", "leadsquared", "pubmatic", "inmobi",
-    "groww", "upstox", "zerodha", "angelone", "5paisa",
-    "kreditbee", "navi", "jupiter-money", "fi-money", "niyo",
-    "slice", "lendingkart", "capital-float",
-    "byjus", "unacademy", "vedantu", "upgrad", "simplilearn",
-    "scaler", "practo", "pharmeasy", "1mg", "healthifyme",
-    "shiprocket", "ecom-express", "porter", "shadowfax",
-    "cars24", "droom", "spinny", "cardekho",
-    "urban-company", "lenskart", "purplle",
-    "innovaccer", "healthplix", "redcliffe-labs",
-    "sprinklr", "druva", "icertis", "elastic-run",
-    "pixis", "sarvam-ai", "krutrim",
-    # ── MNCs India presence ───────────────────────────────────────────────
-    "google-india", "microsoft-india", "amazon-india",
-    "meta-india", "adobe-india", "oracle-india", "sap-india",
-    "ibm-india", "accenture-india", "deloitte-india",
-    # Global Tech
-    "stripe", "notion", "figma", "airbnb", "shopify", "reddit",
-    "coinbase", "discord", "duolingo", "robinhood", "ramp",
-    "rippling", "brex", "plaid", "databricks", "snowflake",
-    "hashicorp", "mongodb", "elastic", "twilio", "zendesk",
-    "intercom", "hubspot", "datadog", "pagerduty", "cloudflare",
-    "fastly", "netlify", "grafana", "sentry", "segment",
-    "mixpanel", "amplitude", "contentful", "algolia", "auth0",
-    "okta", "workos", "launchdarkly", "split", "statsig",
-    "retool", "airtable", "webflow", "zapier", "make",
-    "clickup", "linear", "loom", "miro", "figma",
-    "grammarly", "canva", "deel", "remote", "rippling",
-    "gusto", "lattice", "culture-amp", "leapsome",
-    "greenhouse", "lever", "ashby",
-    # Finance / Fintech
-    "affirm", "klarna", "chime", "robinhood", "wealthsimple",
-    # Healthcare
-    "hinge-health", "lyra-health",
-    # E-commerce
-    "faire", "recharge", "shipbob",
+    "tcs",
+    "phonepe",
+    "postman",
+    "pubmatic",
+    "inmobi",
+    "groww",
+    "slice",
+    "druva",
+    "stripe",
+    "figma",
+    "airbnb",
+    "reddit",
+    "discord",
+    "duolingo",
+    "robinhood",
+    "brex",
+    "databricks",
+    "mongodb",
+    "elastic",
+    "twilio",
+    "intercom",
+    "datadog",
+    "pagerduty",
+    "cloudflare",
+    "fastly",
+    "netlify",
+    "mixpanel",
+    "amplitude",
+    "contentful",
+    "algolia",
+    "okta",
+    "launchdarkly",
+    "airtable",
+    "webflow",
+    "make",
+    "remote",
+    "gusto",
+    "lattice",
+    "greenhouse",
+    "affirm",
+    "chime",
+    "faire",
+    "sigmoid",
+    "highradius",
+    "thoughtworks",
+    "vercel",
+    "planetscale",
+    "watershed",
+    "cerebral",
+    "turing",
+    "iris",
 ]
 
 
@@ -123,6 +127,9 @@ def parse_job(raw: dict, company_slug: str) -> dict:
     )
     dept = departments[0].get("name", "") if departments else ""
 
+    # Extract skills from description and metadata
+    skills_text = extract_skills_from_text(description_text) or extract_skills_from_text(str(metadata))
+
     return {
         "title": title,
         "company": company_name,
@@ -132,7 +139,7 @@ def parse_job(raw: dict, company_slug: str) -> dict:
         "salary": normalize_salary(salary_raw),
         "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
-        "preferredSkills": "Not Specified",
+        "preferredSkills": skills_text,
         "responsibilities": "Not Specified",
         "applyLink": apply_link,
         "featuredImage": "",

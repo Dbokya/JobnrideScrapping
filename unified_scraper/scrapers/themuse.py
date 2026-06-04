@@ -90,6 +90,11 @@ def parse_job(raw: dict) -> dict:
     company_name = company or "Not Specified"
     logo = company_data.get("refs", {}).get("logo_image", "") if isinstance(company_data.get("refs"), dict) else ""
     country_val = "Remote" if is_remote else "USA"
+    
+    # Extract skills from description, category, and levels
+    skills_text = extract_skills_from_text(description_text)
+    if not skills_text or skills_text == "Not Specified":
+        skills_text = extract_skills_from_text(f"{category} {level_str}")
 
     return {
         "title": title,
@@ -100,7 +105,7 @@ def parse_job(raw: dict) -> dict:
         "salary": "Not Disclosed",
         "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
-        "preferredSkills": "Not Specified",
+        "preferredSkills": skills_text,
         "responsibilities": "Not Specified",
         "applyLink": apply_link,
         "featuredImage": logo,

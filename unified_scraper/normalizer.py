@@ -1,8 +1,14 @@
 import re
-from datetime import datetime, timezone, date
+import html as _html_module
+from datetime import datetime, timezone, date, timedelta
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
+
+# Recency window: how many days back to accept.
+#   0 = today only
+#   1 = today + yesterday  (current setting)
+RECENT_DAYS = 1
 
 # ── Location helpers ──────────────────────────────────────────────────────────
 
@@ -68,7 +74,9 @@ def is_india_or_remote(country: str, location: str) -> bool:
     if any(kw in location_l for kw in NON_INDIA_LOCATION_KEYWORDS):
         return False
 
-    return True  # unknown → include
+    # If location gives no clue (e.g. "Hybrid", "Flexible", empty) and country is
+    # also unknown, we cannot confirm this is India/remote → exclude it.
+    return False
 
 
 def is_english(title: str, description: str = "") -> bool:
@@ -107,35 +115,45 @@ def today_ist() -> date:
 
 def is_posted_today(raw_date) -> bool:
     """
-    Returns True if raw_date (str, int ms, or datetime) is today in IST.
-    Accepts: ISO string, Unix timestamp (int/float), datetime object.
-    Returns True if raw_date is None/empty so we don't drop jobs with no date.
+    Returns True if raw_date falls within the recency window (today, or today +
+    yesterday when RECENT_DAYS=1) in IST. Anything older is rejected.
+    Accepts: ISO string, Unix timestamp (int/float), datetime object, or relative
+    strings like "Posted Today" / "Posted Yesterday" / "5 Days Ago".
+    Empty/unparseable dates are included so we don't drop dateless postings.
     """
     if raw_date is None or raw_date == "":
         return True  # no date info → include it (don't drop unknowns)
     try:
         today = today_ist()
+        cutoff = today - timedelta(days=RECENT_DAYS)  # oldest acceptable date
+
+        def in_window(d: date) -> bool:
+            return cutoff <= d <= today
 
         if isinstance(raw_date, (int, float)):
             # Unix timestamp in milliseconds or seconds
             ts = raw_date / 1000 if raw_date > 1e10 else raw_date
             dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(IST)
-            return dt.date() == today
+            return in_window(dt.date())
 
         if isinstance(raw_date, datetime):
             if raw_date.tzinfo is None:
                 raw_date = pytz.utc.localize(raw_date)
-            return raw_date.astimezone(IST).date() == today
+            return in_window(raw_date.astimezone(IST).date())
 
         if isinstance(raw_date, str):
             s = raw_date.strip()
             if not s or s.lower() in ["null", "none", "n/a"]:
                 return True
-            # Handle "2 days ago", "Today", "Just now" style strings
+            # Handle relative strings: "Posted Today", "Yesterday", "5 Days Ago"
             sl = s.lower()
             if any(w in sl for w in ["today", "just now", "an hour", "hours ago", "minutes ago", "minute ago"]):
                 return True
-            if "yesterday" in sl or "days ago" in sl or "week" in sl:
+            # "yesterday" or "1 day ago" → accept only if window includes yesterday
+            if "yesterday" in sl or re.search(r"\b1\s+day\s+ago\b", sl):
+                return RECENT_DAYS >= 1
+            # "2 days ago", "3 days ago", "a week ago", "last month" → too old
+            if "days ago" in sl or "week" in sl or "month" in sl:
                 return False
             # Try parsing ISO / common date formats
             for fmt in [
@@ -154,7 +172,7 @@ def is_posted_today(raw_date) -> bool:
                     dt = datetime.strptime(s[:26], fmt)
                     if dt.tzinfo is None:
                         dt = pytz.utc.localize(dt)
-                    return dt.astimezone(IST).date() == today
+                    return in_window(dt.astimezone(IST).date())
                 except ValueError:
                     continue
             # If we can't parse it, include the job
@@ -215,14 +233,15 @@ def classify_job_for(title: str, description: str) -> str:
     return "experienced"
 
 def clean_html(html: str) -> str:
+    """Strip HTML and return plain text. Handles entity-encoded HTML (e.g. Greenhouse)."""
     if not html:
         return ""
-    text = re.sub(r"<[^>]+>", " ", html)
-    text = re.sub(r"&nbsp;", " ", text)
-    text = re.sub(r"&amp;", "&", text)
-    text = re.sub(r"&lt;", "<", text)
-    text = re.sub(r"&gt;", ">", text)
-    text = re.sub(r"&quot;", '"', text)
+    # Unescape → strip tags → unescape again → strip tags again
+    # Two rounds handle double-encoded HTML like &lt;div&gt;
+    text = _html_module.unescape(html)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = _html_module.unescape(text)
+    text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -319,10 +338,94 @@ IT_KEYWORDS = {
     "it support", "helpdesk", "technical support",
 }
 
-def is_it_job(title: str, description: str = "", category: str = "") -> bool:
-    """Returns True if the job is IT/tech related."""
-    text = f"{title} {description[:300]} {category}".lower()
-    return any(kw in text for kw in IT_KEYWORDS)
+# Non-IT roles welcome ONLY when the company context is clearly a tech/IT firm
+BUSINESS_SUPPORT_TITLE_KEYWORDS = {
+    "hr", "human resource", "recruiter", "recruitment", "talent acquisition",
+    "mba", "marketing", "accountant", "finance", "accounts",
+    "customer support", "customer service", "customer success",
+    "business development", "operations manager", "project coordinator",
+    "office manager", "executive assistant", "content writer", "copywriter",
+    "graphic designer", "video editor", "social media",
+}
+
+# BPO/call-center roles: allowed only at internal tech-company teams, never at
+# standalone BPO/outsourcing firms.
+BPO_TITLE_KEYWORDS = {"call center", "bpo", "voice process", "non voice", "blended process"}
+
+# Standalone BPO / outsourcing firms — BPO roles here are excluded
+STANDALONE_BPO_FIRMS = {
+    "concentrix", "teleperformance", "wipro bpo", "infosys bpo", "mphasis",
+    "firstsource", "startek", "sutherland", "conduent", "alorica",
+    "transcom", "sitel", "synnex", "ttec", "vxl", "hinduja",
+    "serco", "outsource", "bpo solutions", "bpo services", "call centre",
+    "customer care center", "contact center solutions",
+}
+
+# Hard-reject roles that will never be IT-adjacent
+HARD_REJECT_TITLE_KEYWORDS = {
+    "driver", "nurse", "doctor", "physician", "chef", "cook",
+    "teacher", "professor", "lawyer", "attorney",
+    "warehouse", "delivery boy", "peon", "security guard",
+    "field sales", "insurance agent", "loan agent",
+}
+
+# Signals that a company / job context is a tech or MNC firm
+TECH_COMPANY_SIGNALS = {
+    "software", "tech", "saas", "cloud", "fintech", "edtech", "startup",
+    "it company", "it firm", "information technology", "digital",
+    "platform", "app", "internet", "ecommerce", "e-commerce",
+    "product company", "mnc", "analytics", "ai ", " ml ", "data",
+    "tcs", "infosys", "wipro", "hcl", "cognizant", "accenture",
+    "capgemini", "tech mahindra", "ibm", "oracle", "microsoft",
+    "google", "amazon", "flipkart", "zomato", "swiggy", "razorpay",
+    "phonepe", "paytm", "byju", "meesho", "freshworks", "zoho",
+    "ola", "uber", "cred", "groww", "zerodha", "nykaa", "myntra",
+    "bigbasket", "dunzo", "cure.fit", "lenskart", "policybazaar",
+    "makemytrip", "yatra", "unacademy", "upgrad", "byjus",
+}
+
+
+def is_it_job(title: str, description: str = "", category: str = "", company: str = "") -> bool:
+    """
+    Returns True if the job belongs in a tech-focused / MNC job board.
+
+    Rules (evaluated top to bottom, first match wins):
+    1. Hard-reject titles (driver, nurse, field sales…)  → False
+    2. BPO/call-center title at a standalone BPO firm    → False
+    3. BPO/call-center title at a tech/product company   → True
+    4. Core IT keyword found in title/desc/category      → True
+    5. Business-support title (HR, finance, marketing…)
+       at a tech/MNC firm (detected via TECH_COMPANY_SIGNALS) → True
+    6. Everything else                                   → False
+    """
+    title_l = title.lower()
+    company_l = company.lower()
+
+    # 1. Hard reject
+    if any(kw in title_l for kw in HARD_REJECT_TITLE_KEYWORDS):
+        return False
+
+    # 2 & 3. BPO / call-center roles
+    if any(kw in title_l for kw in BPO_TITLE_KEYWORDS):
+        # Reject if the company name or description mentions a standalone BPO firm
+        ctx = f"{company_l} {description[:300]}".lower()
+        if any(firm in ctx for firm in STANDALONE_BPO_FIRMS):
+            return False
+        # Allow only if context confirms it's an internal team at a tech company
+        company_ctx = f"{company_l} {description[:600]} {category}".lower()
+        return any(sig in company_ctx for sig in TECH_COMPANY_SIGNALS)
+
+    # 4. Core IT role
+    text = f"{title} {description[:400]} {category}".lower()
+    if any(kw in text for kw in IT_KEYWORDS):
+        return True
+
+    # 5. Business/support role — allow only at tech/MNC firms
+    if any(kw in title_l for kw in BUSINESS_SUPPORT_TITLE_KEYWORDS):
+        company_ctx = f"{company_l} {description[:600]} {category}".lower()
+        return any(sig in company_ctx for sig in TECH_COMPANY_SIGNALS)
+
+    return False
 
 
 def normalize_work_mode(location: str, job_type: str = "") -> str:
@@ -435,6 +538,94 @@ def infer_industry(company: str, category: str = "", title: str = "") -> str:
     if re.search(r"\bai\b|\bml\b|\bmachine.?learning\b|\bartificial.?intel\b", text):
         return "AI / ML"
     return "Information Technology"
+
+
+# Canonical skill names → regex patterns to detect them in text
+_SKILL_PATTERNS: list[tuple[str, str]] = [
+    # Languages
+    ("Python",         r"\bpython\b"),
+    ("Java",           r"\bjava\b(?!script)"),
+    ("JavaScript",     r"\bjavascript\b|\bjs\b"),
+    ("TypeScript",     r"\btypescript\b|\bts\b"),
+    ("Go",             r"\bgolang\b|\bgo\s+programming\b|\bgo\s+lang\b"),
+    ("Rust",           r"\brust\b"),
+    ("C++",            r"\bc\+\+\b|\bcpp\b"),
+    ("C#",             r"\bc#\b|\b\.net\b|\bdotnet\b"),
+    ("PHP",            r"\bphp\b"),
+    ("Ruby",           r"\bruby\b"),
+    ("Scala",          r"\bscala\b"),
+    ("Kotlin",         r"\bkotlin\b"),
+    ("Swift",          r"\bswift\b"),
+    ("R",              r"\br\s+programming\b|\blanguage\s+r\b"),
+    # Frontend
+    ("React",          r"\breact\.?js\b|\breact\b"),
+    ("Angular",        r"\bangular\b"),
+    ("Vue.js",         r"\bvue\.?js\b|\bvue\b"),
+    ("Next.js",        r"\bnext\.?js\b"),
+    ("HTML/CSS",       r"\bhtml\b|\bcss\b|\bsass\b|\bscss\b"),
+    ("Redux",          r"\bredux\b"),
+    ("Tailwind CSS",   r"\btailwind\b"),
+    # Backend
+    ("Node.js",        r"\bnode\.?js\b|\bnodejs\b"),
+    ("Django",         r"\bdjango\b"),
+    ("Flask",          r"\bflask\b"),
+    ("FastAPI",        r"\bfastapi\b"),
+    ("Spring Boot",    r"\bspring\s*boot\b|\bspring\s*framework\b"),
+    ("Express",        r"\bexpress\.?js\b|\bexpress\b"),
+    ("GraphQL",        r"\bgraphql\b"),
+    ("REST API",       r"\brest\s*api\b|\brestful\b"),
+    # Mobile
+    ("Flutter",        r"\bflutter\b"),
+    ("React Native",   r"\breact\s*native\b"),
+    ("Android",        r"\bandroid\b"),
+    ("iOS",            r"\bios\b|\bswift\b|\bobjective-c\b"),
+    # Cloud & DevOps
+    ("AWS",            r"\baws\b|\bamazon\s*web\s*services\b"),
+    ("Azure",          r"\bazure\b|\bmicrosoft\s*azure\b"),
+    ("GCP",            r"\bgcp\b|\bgoogle\s*cloud\b"),
+    ("Docker",         r"\bdocker\b"),
+    ("Kubernetes",     r"\bkubernetes\b|\bk8s\b"),
+    ("Terraform",      r"\bterraform\b"),
+    ("Ansible",        r"\bansible\b"),
+    ("CI/CD",          r"\bci/cd\b|\bjenkins\b|\bgithub\s*actions\b|\bgitlab\s*ci\b"),
+    ("Linux",          r"\blinux\b|\bunix\b"),
+    ("Git",            r"\bgit\b|\bgithub\b|\bgitlab\b"),
+    # Databases
+    ("PostgreSQL",     r"\bpostgresql\b|\bpostgres\b"),
+    ("MySQL",          r"\bmysql\b"),
+    ("MongoDB",        r"\bmongodb\b|\bmongo\b"),
+    ("Redis",          r"\bredis\b"),
+    ("Elasticsearch",  r"\belasticsearch\b|\belastic\b"),
+    ("Cassandra",      r"\bcassandra\b"),
+    ("DynamoDB",       r"\bdynamodb\b"),
+    ("SQL",            r"\bsql\b"),
+    # Data & ML
+    ("TensorFlow",     r"\btensorflow\b|\btf\b"),
+    ("PyTorch",        r"\bpytorch\b"),
+    ("Pandas",         r"\bpandas\b"),
+    ("Spark",          r"\bapache\s*spark\b|\bpyspark\b|\bspark\b"),
+    ("Kafka",          r"\bkafka\b|\bapache\s*kafka\b"),
+    ("Airflow",        r"\bairflow\b"),
+    ("Databricks",     r"\bdatabricks\b"),
+    ("Hadoop",         r"\bhadoop\b"),
+    ("scikit-learn",   r"\bscikit.?learn\b|\bsklearn\b"),
+    # Misc
+    ("Microservices",  r"\bmicroservices\b"),
+    ("gRPC",           r"\bgrpc\b"),
+    ("Nginx",          r"\bnginx\b"),
+    ("SAP",            r"\bsap\b"),
+    ("Salesforce",     r"\bsalesforce\b"),
+    ("Jira",           r"\bjira\b"),
+]
+
+
+def extract_skills_from_text(text: str) -> str:
+    """Scan free-form text and return a comma-separated list of detected skills."""
+    if not text:
+        return "Not Specified"
+    tl = text.lower()
+    found = [name for name, pattern in _SKILL_PATTERNS if re.search(pattern, tl)]
+    return ", ".join(found) if found else "Not Specified"
 
 
 def normalize_skills(skills) -> str:

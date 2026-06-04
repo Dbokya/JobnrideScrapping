@@ -5,12 +5,15 @@ Register free at: https://developer.adzuna.com/
 Env vars: ADZUNA_APP_ID, ADZUNA_APP_KEY
 """
 import os
+import re
 import requests
 import time
+from datetime import datetime, timezone
 from normalizer import (
     normalize_job_type, classify_job_for,
     clean_html, normalize_location, normalize_salary,
     normalize_work_mode, extract_education, infer_functional_area, infer_industry,
+    extract_skills_from_text,
 )
 
 SOURCE = "adzuna"
@@ -24,9 +27,21 @@ COUNTRIES = {
 }
 
 RESULTS_PER_PAGE = 50
-MAX_PAGES_PER_COUNTRY = 5  # 250 jobs per search term
 
-# IT job search terms for India
+# ── Quota management ─────────────────────────────────────────────────────────
+# Adzuna free tier = 250 API calls/day. The GitHub Action runs 6×/day (every
+# 4h), so each run gets a budget of ~250/6 ≈ 41 calls. To cover ALL companies
+# daily without blowing quota, the company list is ROTATED across the 6 runs:
+# each run handles 1/NUM_SLOTS of COMPANY_TERMS, chosen by the clock hour, so
+# every company is searched exactly once per day.
+#   per-run calls ≈ (KEYWORD_TERMS * MAX_PAGES_KEYWORD)
+#                 + (ceil(len(COMPANY_TERMS)/NUM_SLOTS) * MAX_PAGES_COMPANY)
+NUM_SLOTS = 6           # number of scheduled runs per day (matches workflow cron)
+MAX_PAGES_KEYWORD = 2   # 2 pages = 100 newest jobs per keyword
+MAX_PAGES_COMPANY = 1   # 1 page  = 50 newest jobs per company
+KEYWORD_TERMS = 8       # use first N keyword terms each run
+
+# IT job search terms for India (broad coverage across ALL companies)
 SEARCH_TERMS = [
     "software engineer", "data engineer", "product manager",
     "frontend developer", "backend developer", "devops engineer",
@@ -35,6 +50,48 @@ SEARCH_TERMS = [
     "solution architect", "java developer", "python developer",
     "react developer", "node.js developer", "android developer",
     "ios developer", "flutter developer",
+]
+
+# Big IT-services / MNC employers that have NO public ATS API — Adzuna is the
+# only way to reach them. We search by company name and keep only jobs whose
+# advertised company actually matches. Companies already covered by a live ATS
+# board (greenhouse/lever/ashby/smartrecruiters/recruitee) are intentionally
+# left OUT here to avoid duplicate postings. Extend freely.
+COMPANY_TERMS = [
+    # ── Tier-1 / Tier-2 IT services ──────────────────────────────────────────
+    "Amdocs", "Cognizant", "Capgemini", "Accenture", "Infosys", "Wipro",
+    "TCS", "Tata Consultancy", "HCLTech", "Tech Mahindra", "Mphasis",
+    "LTIMindtree", "Persistent Systems", "Coforge", "Birlasoft", "Cyient",
+    "KPIT", "Zensar", "Mastek", "Nagarro", "EPAM", "Globant", "Luxoft",
+    "GlobalLogic", "Encora", "Brillio", "Hexaware", "Sonata Software",
+    "Happiest Minds", "Tata Elxsi", "L&T Technology Services",
+    "Mindtree", "NIIT Technologies", "DXC Technology", "Unisys",
+    "Tata Technologies", "Quest Global", "Cigniti", "Newgen Software",
+    "Nucleus Software", "Intellect Design Arena", "Subex", "Saksoft",
+    "R Systems", "Cybage", "Xoriant", "Yash Technologies", "Trigent",
+    "Onward Technologies", "Sasken Technologies", "3i Infotech",
+    # ── BPO / ITES ───────────────────────────────────────────────────────────
+    "Genpact", "WNS Global", "Firstsource", "Sutherland", "eClerx",
+    "Conduent", "Hinduja Global", "Teleperformance", "Concentrix", "Infosys BPM",
+    # ── Consulting / Big 4 / analytics ───────────────────────────────────────
+    "Deloitte", "PwC", "EY", "KPMG", "Sapient", "Publicis Sapient",
+    "Tiger Analytics", "Fractal Analytics", "Mu Sigma", "LatentView",
+    "ZS Associates", "Tredence", "Quantiphi", "Affine", "Course5", "Gramener",
+    "McKinsey", "BCG", "Bain",
+    # ── GCC / captive / MNC product & dev centres in India ───────────────────
+    "IBM", "Oracle", "SAP Labs", "Adobe", "Salesforce", "ServiceNow",
+    "VMware", "Cisco", "Qualcomm", "Nvidia", "Intel", "AMD", "Micron",
+    "Samsung", "Dell Technologies", "Walmart Global Tech", "Google",
+    "Microsoft", "Amazon", "Uber", "Expedia", "Target Corporation", "Lowe's",
+    "Tesco", "Maersk", "Optum", "Fidelity Investments", "Goldman Sachs",
+    "JPMorgan", "Morgan Stanley", "Wells Fargo", "American Express",
+    "Mastercard", "Visa", "PayPal", "Barclays", "HSBC", "Standard Chartered",
+    "Citi", "Deutsche Bank", "Nomura", "Bank of America",
+    "Ericsson", "Nokia", "Bosch", "Siemens", "Honeywell", "Schneider Electric",
+    # ── Indian enterprises / unicorns without a working ATS board ────────────
+    "Flipkart", "Swiggy", "Zomato", "Razorpay", "Nykaa", "Ola", "OYO",
+    "Zerodha", "Dream11", "Delhivery", "Udaan", "Urban Company", "Lenskart",
+    "BigBasket", "Zepto", "PharmEasy", "Unacademy", "PhonePe", "Paytm",
 ]
 
 
@@ -95,6 +152,11 @@ def parse_job(raw: dict, country_name: str) -> dict:
 
     job_type = normalize_job_type(contract_type or contract_time)
     company_name = company or "Not Specified"
+    
+    # Extract skills from description and category
+    skills_text = extract_skills_from_text(description_text)
+    if not skills_text or skills_text == "Not Specified":
+        skills_text = extract_skills_from_text(category)
 
     return {
         "title": title,
@@ -105,7 +167,7 @@ def parse_job(raw: dict, country_name: str) -> dict:
         "salary": salary,
         "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
-        "preferredSkills": "Not Specified",
+        "preferredSkills": skills_text,
         "responsibilities": "Not Specified",
         "applyLink": apply_link,
         "featuredImage": "",
@@ -126,6 +188,28 @@ def parse_job(raw: dict, country_name: str) -> dict:
     }
 
 
+def _collect(country_code, country_name, search, max_pages, company_filter=None):
+    """Fetch jobs for one search term; optionally keep only matching company."""
+    jobs = []
+    needle = re.compile(rf"\b{re.escape(company_filter)}\b", re.I) if company_filter else None
+    for page in range(1, max_pages + 1):
+        raw_jobs = fetch_page(country_code, search, page)
+        if not raw_jobs:
+            break
+        for raw in raw_jobs:
+            try:
+                job = parse_job(raw, country_name)
+                if not (job["title"] and job["company"] != "Not Specified" and job["applyLink"]):
+                    continue
+                if needle and not needle.search(job["company"]):
+                    continue
+                jobs.append(job)
+            except Exception as e:
+                print(f"  ⚠ Adzuna parse error: {e}")
+        time.sleep(0.4)
+    return jobs
+
+
 def scrape() -> list:
     if not APP_ID or not APP_KEY:
         print("\n⚠️  Adzuna: Skipping — ADZUNA_APP_ID and ADZUNA_APP_KEY not set.")
@@ -133,25 +217,33 @@ def scrape() -> list:
         return []
 
     all_jobs = []
-    print(f"\n📊 Adzuna: Fetching jobs across {len(COUNTRIES)} countries...")
+
+    # Pick this run's company slice by clock hour so all firms are covered once
+    # per day across the NUM_SLOTS scheduled runs (no shared state needed).
+    slot = (datetime.now(timezone.utc).hour // (24 // NUM_SLOTS)) % NUM_SLOTS
+    company_slice = COMPANY_TERMS[slot::NUM_SLOTS]
+    calls_run = (KEYWORD_TERMS * MAX_PAGES_KEYWORD) + (len(company_slice) * MAX_PAGES_COMPANY)
+    print(f"\n📊 Adzuna: run slot {slot + 1}/{NUM_SLOTS} — keywords + "
+          f"{len(company_slice)} companies (~{calls_run} calls this run)...")
 
     for country_code, country_name in COUNTRIES.items():
-        country_jobs = []
-        for search in SEARCH_TERMS[:8]:  # up to 8 search terms for India
-            for page in range(1, MAX_PAGES_PER_COUNTRY + 1):
-                raw_jobs = fetch_page(country_code, search, page)
-                if not raw_jobs:
-                    break
-                for raw in raw_jobs:
-                    try:
-                        job = parse_job(raw, country_name)
-                        if job["title"] and job["company"] != "Not Specified" and job["applyLink"]:
-                            country_jobs.append(job)
-                    except Exception as e:
-                        print(f"  ⚠ Adzuna parse error: {e}")
-                time.sleep(0.4)
-        print(f"  ✓ {country_name}: {len(country_jobs)} jobs")
-        all_jobs.extend(country_jobs)
+        # ── Phase 1: broad keyword coverage (any company), every run ─────────
+        kw_jobs = []
+        for search in SEARCH_TERMS[:KEYWORD_TERMS]:
+            kw_jobs.extend(_collect(country_code, country_name, search, MAX_PAGES_KEYWORD))
+        print(f"  ✓ {country_name} keywords: {len(kw_jobs)} jobs")
+        all_jobs.extend(kw_jobs)
+
+        # ── Phase 2: this run's company slice (IT-services giants w/o ATS) ───
+        co_jobs = []
+        for company in company_slice:
+            hits = _collect(country_code, country_name, company, MAX_PAGES_COMPANY,
+                            company_filter=company)
+            if hits:
+                co_jobs.extend(hits)
+        print(f"  ✓ {country_name} companies: {len(co_jobs)} jobs "
+              f"(from {len(company_slice)} firms this slot)")
+        all_jobs.extend(co_jobs)
 
     print(f"  → Adzuna total: {len(all_jobs)} jobs")
     return all_jobs

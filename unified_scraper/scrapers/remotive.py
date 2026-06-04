@@ -57,7 +57,9 @@ def parse_job(raw: dict) -> dict:
 
     job_type = normalize_job_type(job_type_raw) if job_type_raw else "Remote"
     loc_str = f"{location} (Remote)"
-    skills_str = normalize_skills(tags)
+    
+    # Extract skills from tags or description
+    skills_str = normalize_skills(tags) if tags else extract_skills_from_text(description_text)
 
     return {
         "title": title,

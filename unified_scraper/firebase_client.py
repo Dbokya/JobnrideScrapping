@@ -4,10 +4,22 @@ import firebase_admin
 from firebase_admin import credentials, firestore, messaging
 from datetime import datetime
 import pytz
+import re
+from normalizer import extract_skills_from_text
 
 IST = pytz.timezone("Asia/Kolkata")
 
 _db = None
+
+def _clean_html_in_text(text: str) -> str:
+    """Quick HTML tag removal as a safety layer before saving to Firebase."""
+    if not text or "<" not in text or ">" not in text:
+        return text
+    # Remove HTML tags and entities
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"&[a-z]+;", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 def init_firebase():
     global _db
@@ -74,7 +86,16 @@ def save_job(job_data: dict, job_counter: int) -> bool:
     job_hash = make_job_hash(company, title, location)
 
     job_type = job_data.get("jobType", "Full-Time")
-    skills_str = job_data.get("preferredSkills", "Not Specified")
+    skills_str = _clean_html_in_text(job_data.get("preferredSkills", "Not Specified"))
+    
+    # Fallback: Extract skills from description if not found or "Not Specified"
+    if not skills_str or skills_str == "Not Specified":
+        description = job_data.get("description", "")
+        if description:
+            extracted_skills = extract_skills_from_text(description)
+            if extracted_skills and extracted_skills != "Not Specified":
+                skills_str = extracted_skills
+    
     # Build a keySkills list (array) from comma-separated skills string
     key_skills_list = (
         [s.strip() for s in skills_str.split(",") if s.strip() and s.strip() != "Not Specified"]
@@ -95,7 +116,7 @@ def save_job(job_data: dict, job_counter: int) -> bool:
         "title": title,
         "company": company,
         "companyLogo": job_data.get("featuredImage", "") or job_data.get("companyLogo", ""),
-        "aboutCompany": job_data.get("aboutCompany", ""),
+        "aboutCompany": _clean_html_in_text(job_data.get("aboutCompany", "")),
         "location": location,
         "country": job_data.get("country", ""),
         "workMode": job_data.get("workMode", "On-site"),       # Remote / Hybrid / On-site
@@ -112,7 +133,7 @@ def save_job(job_data: dict, job_counter: int) -> bool:
 
         # ── Compensation ──────────────────────────────────────────────────
         "salary": job_data.get("salary", "Not Disclosed"),
-        "benefits": job_data.get("benefits", ""),
+        "benefits": _clean_html_in_text(job_data.get("benefits", "")),
 
         # ── Skills ────────────────────────────────────────────────────────
         "preferredSkills": skills_str,
@@ -120,9 +141,9 @@ def save_job(job_data: dict, job_counter: int) -> bool:
         "keySkills": key_skills_list,                           # array for filtering/tags
 
         # ── Full description sections ──────────────────────────────────────
-        "description": job_data.get("description", ""),
-        "responsibilities": job_data.get("responsibilities", "Not Specified"),
-        "requirements": job_data.get("requirements", "Not Specified"),
+        "description": _clean_html_in_text(job_data.get("description", "")),
+        "responsibilities": _clean_html_in_text(job_data.get("responsibilities", "Not Specified")),
+        "requirements": _clean_html_in_text(job_data.get("requirements", "Not Specified")),
 
         # ── Apply ─────────────────────────────────────────────────────────
         "applyLink": apply_link,

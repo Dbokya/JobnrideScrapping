@@ -14,36 +14,14 @@ from normalizer import (
 
 SOURCE = "lever"
 
+# Company slugs — verified live via audit_slugs.py
 COMPANIES = [
-    # ── India IT / Fintech ────────────────────────────────────────────────
-    "groww", "phonepe", "razorpay", "cred", "zepto",
-    "navi", "jupiter-money", "fi-money", "open",
-    "paytm", "mobikwik", "bharatpe", "khatabook", "okcredit",
-    "slice", "kreditbee", "lendingkart", "freo",
-    "dunzo", "blinkit", "swiggy-instamart",
-    "zetwerk", "moglix", "udaan", "ofbusiness",
-    "vedantu", "testbook", "doubtnut", "classplus",
-    "innovaccer", "niramai", "sigtuple", "qure-ai",
-    "facilio", "bizongo", "ecozen",
-    "mindtickle", "highradius", "whatfix", "zipteams",
-    "vyapar", "zoho", "freshworks-lever",
-    "cogoport", "freight-tiger", "blackbuck",
-    "stanza-living", "colive", "nestaway",
-    # ── India MNC Dev Centers ─────────────────────────────────────────────
-    "thoughtworks", "sapient", "publicis-sapient",
-    # Global Tech
-    "atlassian", "netflix", "canva", "github", "dropbox",
-    "eventbrite", "squarespace", "twitch", "pinterest",
-    "lyft", "instacart", "grubhub", "doordash",
-    "carta", "lattice", "gusto", "rippling",
-    "benchling", "nerdio", "stytch", "courier",
-    "airplane", "airplane-dev", "mercury", "brex",
-    "dbt-labs", "prefect", "airbyte", "hightouch",
-    "census", "fivetran", "stitch",
-    "scale", "cohere", "weights-biases",
-    "huggingface", "together", "perplexity",
-    # E-comm / Retail
-    "glossier", "warby-parker", "allbirds",
+    "cred",
+    "paytm",
+    "mindtickle",
+    "toptal",
+    "meesho",
+    "hevodata",
 ]
 
 
@@ -101,6 +79,10 @@ def parse_job(raw: dict, company_slug: str) -> dict:
     job_for = classify_job_for(title, description_text)
     job_type = normalize_job_type(commitment)
     loc_str = location or "Not Specified"
+    
+    # Extract skills from description if not found in lists
+    if not skills:
+        skills = extract_skills_from_text(f"{description_text} {requirements}")
 
     full_description = build_description(
         raw=description_text,

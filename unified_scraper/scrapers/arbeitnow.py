@@ -9,6 +9,7 @@ from normalizer import (
     normalize_job_type, classify_job_for,
     clean_html, normalize_location, normalize_skills,
     normalize_work_mode, extract_education, infer_functional_area, infer_industry,
+    extract_skills_from_text,
 )
 
 SOURCE = "arbeitnow"
@@ -52,7 +53,7 @@ def parse_job(raw: dict) -> dict:
 
     job_type = normalize_job_type(job_type_raw)
     loc_str = location or "Remote"
-    skills_str = normalize_skills(tags)
+    skills_str = normalize_skills(tags) if tags else extract_skills_from_text(description_text)
 
     return {
         "title": title,

@@ -13,40 +13,14 @@ from normalizer import (
 
 SOURCE = "smartrecruiters"
 
-# Format: (display_name, company_id_slug)
+# Format: (display_name, company_id_slug) — verified via audit_slugs.py
 COMPANIES = [
-    # Big IT
-    ("HCL Technologies",         "HCLTech"),
-    ("Cognizant",                "Cognizant"),
-    ("Mphasis",                  "Mphasis"),
-    ("Hexaware Technologies",    "Hexaware"),
-    ("Cyient",                   "Cyient"),
-    ("NIIT Technologies",        "NIITTechnologies"),
-    ("Mindtree",                 "MindtreeLimited"),
-    ("Sasken Technologies",      "Sasken"),
-    ("Tata Elxsi",               "TataElxsi"),
-    ("LTIMINDTREE",              "LTIMindtree"),
-    ("Coforge",                  "Coforge"),
-    ("Zensar",                   "ZensarTechnologies"),
-    # MNCs in India
-    ("Siemens India",            "Siemens"),
-    ("Bosch India",              "Bosch"),
-    ("ABB India",                "ABBGroup"),
-    ("Schneider Electric India", "SchneiderElectric"),
-    ("Philips India",            "Philips"),
-    ("Honeywell India",          "Honeywell"),
-    # Startups / Product
-    ("Ola",                      "ANITechnologies"),
-    ("Urban Company",            "UrbanCompany"),
-    ("Sharechat",                "ShareChat"),
-    ("Dailyhunt",                "DailyhuntVerso"),
-    ("Nykaa",                    "Nykaa"),
-    ("Purplle",                  "Purplle"),
-    ("Lenskart",                 "Lenskart"),
-    ("Cars24",                   "Cars24"),
-    ("Droom",                    "Droom"),
-    ("OYO",                      "OYO"),
-    ("Zolo",                     "ZoloStays"),
+    ("Cars24", "Cars24"),
+    ("Freshworks", "freshworks"),
+    ("MindTickle", "mindtickle"),
+    ("Iris Software", "irissoftware"),
+    ("Synechron", "synechron"),
+    ("Whatfix", "whatfix"),
 ]
 
 PAGE_LIMIT = 100
@@ -120,13 +94,17 @@ def parse_job(raw: dict, company_name: str, company_id: str) -> dict:
         description_text = clean_html(sections.get("jobDescription", {}).get("text", "") or "")
         requirements_text = clean_html(sections.get("qualifications", {}).get("text", "") or "")
         responsibilities_text = clean_html(sections.get("additionalInformation", {}).get("text", "") or "")
+        # Try to extract skills section
+        skills_text = clean_html(sections.get("skills", {}).get("text", "") or "")
         # Also check top-level fields
         if not description_text:
             description_text = clean_html(detail.get("description", "") or "")
 
     job_for = classify_job_for(title, description_text)
-    job_type = normalize_job_type(str(job_type_raw))
-
+    job_type = normalize_job_type(str(job_type_raw))    
+    # Extract skills if not found in dedicated section
+    if not skills_text or skills_text == "Not Specified":
+        skills_text = extract_skills_from_text(f"{description_text} {requirements_text}")
     full_description = build_description(
         raw=description_text,
         responsibilities=responsibilities_text,

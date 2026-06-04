@@ -146,6 +146,12 @@ def parse_job(raw: dict, company_name: str, subdomain: str) -> dict:
     )
 
     dept_str = str(department)
+    
+    # Extract skills from description, requirements, and department
+    skills_text = extract_skills_from_text(full_description)
+    if not skills_text or skills_text == "Not Specified":
+        skills_text = extract_skills_from_text(f"{requirements_text} {dept_str}")
+    
     return {
         "title": title,
         "company": company_name,
@@ -155,7 +161,7 @@ def parse_job(raw: dict, company_name: str, subdomain: str) -> dict:
         "salary": "Not Disclosed",
         "description": full_description,
         "requirements": requirements_text[:1000] if requirements_text else "Not Specified",
-        "preferredSkills": "Not Specified",
+        "preferredSkills": skills_text,
         "responsibilities": responsibilities_text[:1000] if responsibilities_text else "Not Specified",
         "applyLink": apply_link,
         "featuredImage": "",

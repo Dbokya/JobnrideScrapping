@@ -16,7 +16,7 @@ from scrapers import (
     greenhouse, lever, ashby,
     workday, smartrecruiters, freshteam, wellfound,
     remotive, arbeitnow, himalayas, remoteok,
-    adzuna, themuse,
+    adzuna, themuse, jobicy, weworkremotely, recruitee,
 )
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -40,6 +40,10 @@ SOURCES = {
     # Optional (need free API keys)
     "adzuna":           True,   # India + 6 other countries (needs ADZUNA_APP_ID/KEY)
     "themuse":          True,   # US companies
+    # New — no API key required
+    "jobicy":           True,   # Remote tech jobs globally (free REST API)
+    "weworkremotely":   True,   # Remote jobs via RSS (largest remote-only board)
+    "recruitee":        True,   # Synechron, Publicis Sapient, Ramco... (recruitee.com)
 }
 
 SCRAPER_MAP = {
@@ -56,6 +60,9 @@ SCRAPER_MAP = {
     "remoteok":        remoteok.scrape,
     "adzuna":          adzuna.scrape,
     "themuse":         themuse.scrape,
+    "jobicy":          jobicy.scrape,
+    "weworkremotely":  weworkremotely.scrape,
+    "recruitee":       recruitee.scrape,
 }
 
 # IT filter — set to True to only save IT/tech jobs
@@ -129,7 +136,12 @@ def run():
     if FILTER_IT_ONLY:
         all_jobs = [
             j for j in all_jobs
-            if is_it_job(j.get("title", ""), j.get("description", ""), j.get("category", ""))
+            if is_it_job(
+                j.get("title", ""),
+                j.get("description", ""),
+                j.get("category", ""),
+                j.get("company", ""),
+            )
         ]
     n_it        = len(all_jobs)
 
@@ -229,7 +241,7 @@ def run():
     print(f"   {'STEP':<38} {'JOBS':>6}")
     print(f"   {'-'*45}")
     print(f"   {'Fetched from all sources':<38} {n_fetched:>6}")
-    print(f"   {'After today-only filter':<38} {n_today:>6}  (-{n_fetched - n_today})")
+    print(f"   {'After recency filter (today+yesterday)':<38} {n_today:>6}  (-{n_fetched - n_today})")
     print(f"   {'After India + Remote filter':<38} {n_location:>6}  (-{n_today - n_location})")
     print(f"   {'After English-only filter':<38} {n_english:>6}  (-{n_location - n_english})")
     print(f"   {'After IT-only filter':<38} {n_it:>6}  (-{n_english - n_it})")

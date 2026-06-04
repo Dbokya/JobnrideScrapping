@@ -9,47 +9,16 @@ from normalizer import (
     normalize_experience, normalize_job_type, classify_job_for,
     clean_html, normalize_location, normalize_skills,
     normalize_work_mode, extract_education, infer_functional_area, infer_industry,
+    extract_skills_from_text,
 )
 
 SOURCE = "workday"
 
 # Format: (company_display_name, tenant, wd_version, board_slug)
-# These are verified public Workday job boards for Indian IT companies
+# NOTE: most Indian IT giants have NO working public Workday board (all returned HTTP 422).
+# They are now covered via the Adzuna aggregator instead. Only verified-live boards kept here.
 COMPANIES = [
-    # Big IT / Service Companies
-    ("Infosys",         "infosys",          3,  "Infosys_Careers"),
-    ("Wipro",           "wipro",            3,  "Wipro_Careers"),
-    ("Capgemini",       "capgemini",        3,  "Capgemini"),
-    ("Tech Mahindra",   "techmahindra",     3,  "TechMahindra"),
-    ("Mphasis",         "mphasis",          5,  "Mphasis_External"),
-    ("L&T Technology",  "ltts",             3,  "LTTS"),
-    ("Hexaware",        "hexaware",         3,  "Hexaware"),
-    ("Birlasoft",       "birlasoft",        3,  "Birlasoft_Careers"),
-    ("Persistent",      "persistent",       3,  "Persistent_Systems"),
-    ("KPIT",            "kpit",             3,  "KPIT_Careers"),
-    ("Zensar",          "zensar",           3,  "Zensar_Technologies"),
-    ("Cyient",          "cyient",           3,  "Cyient_Careers"),
-    ("Mastek",          "mastek",           3,  "Mastek"),
-    ("Sonata Software", "sonata",           3,  "Sonata_Software"),
-    # Product / New Age
-    ("Zomato",          "zomato",           3,  "Zomato"),
-    ("Flipkart",        "flipkart",         3,  "Flipkart"),
-    ("Paytm",           "paytm",            3,  "Paytm_Careers"),
-    ("Ola",             "olacabs",          3,  "Ola_Careers"),
-    ("MakeMyTrip",      "makemytrip",       3,  "MakeMyTrip"),
-    ("InMobi",          "inmobi",           3,  "InMobi"),
-    ("Freshworks",      "freshworks",       3,  "Freshworks"),
-    ("Druva",           "druva",            3,  "Druva"),
-    ("Mindtree",        "mindtreeltd",      3,  "Mindtree_Careers"),
-    # MNCs with big India presence
-    ("Accenture India", "accenture",        5,  "AccentureCareers"),
-    ("IBM India",       "ibm",              3,  "IBM_Careers"),
-    ("SAP India",       "sap",              3,  "SAP"),
-    ("Oracle India",    "oracle",           5,  "OracleCareers"),
-    ("Deloitte India",  "deloittedigital", 3,  "DeloitteDigital"),
-    ("EY India",        "ey",               3,  "EY_Careers"),
-    ("KPMG India",      "kpmg",             3,  "KPMG_Careers"),
-    ("PwC India",       "pwc",              3,  "pwc"),
+    ("HARMAN", "harman", 3, "HARMAN"),
 ]
 
 PAGE_SIZE = 20
@@ -122,6 +91,11 @@ def parse_job(raw: dict, company_name: str, tenant: str, wd_ver: int, board: str
 
     job_type = normalize_job_type(str(job_type_raw))
     category_str = str(category)
+    
+    # Extract skills from description and category
+    skills_text = extract_skills_from_text(description_text)
+    if not skills_text or skills_text == "Not Specified":
+        skills_text = extract_skills_from_text(category_str)
 
     return {
         "title": title,
@@ -132,7 +106,7 @@ def parse_job(raw: dict, company_name: str, tenant: str, wd_ver: int, board: str
         "salary": "Not Disclosed",
         "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
-        "preferredSkills": "Not Specified",
+        "preferredSkills": skills_text,
         "responsibilities": "Not Specified",
         "applyLink": apply_link,
         "featuredImage": "",

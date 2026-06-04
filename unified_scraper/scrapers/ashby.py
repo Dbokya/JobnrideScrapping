@@ -9,27 +9,35 @@ from normalizer import (
     normalize_experience, normalize_job_type, classify_job_for,
     clean_html, normalize_location, normalize_skills,
     normalize_work_mode, extract_education, infer_functional_area, infer_industry,
+    extract_skills_from_text,
 )
 
 SOURCE = "ashby"
 
+# Company slugs — verified live via audit_slugs.py
 COMPANIES = [
-    # AI / Dev Tools
-    "linear", "vercel", "supabase", "cursor", "perplexity",
-    "anthropic", "openai", "mistral", "cohere", "together-ai",
-    "replit", "railway", "fly-io", "turso", "neon",
-    "planetscale", "xata", "convex", "trigger",
-    "resend", "loops", "cal", "dub", "papermark",
-    # India Startups
-    "sarvam", "krutrim", "pixis", "sprinklr",
-    # Global
-    "figma", "notion", "loom", "pitch", "craft",
-    "rows", "basedash", "retool", "airplane",
-    "incident-io", "rootly", "firehydrant",
-    "merge", "finch", "stackone",
-    "ramp", "mercury", "brex", "puzzle",
-    "watershed", "patch", "cloverly",
-    "cerebral", "mindbloom", "brightside",
+    "linear",
+    "supabase",
+    "cursor",
+    "perplexity",
+    "openai",
+    "cohere",
+    "replit",
+    "railway",
+    "neon",
+    "resend",
+    "sarvam",
+    "clarisights",
+    "signoz",
+    "notion",
+    "merge",
+    "finch",
+    "stackone",
+    "ramp",
+    "watershed",
+    "read-ai",
+    "deel",
+    "inngest",
 ]
 
 
@@ -40,7 +48,8 @@ def fetch_jobs(company_slug: str, retries: int = 3) -> list:
             resp = requests.get(url, timeout=15, headers={"User-Agent": "JobNRideBot/2.0"})
             if resp.status_code == 200:
                 data = resp.json()
-                return data.get("jobPostings", [])
+                # Ashby returns {"jobs": [...]}; older API used "jobPostings"
+                return data.get("jobs", data.get("jobPostings", []))
             if resp.status_code in [404, 400]:
                 return []
             print(f"  ⚠ Ashby {company_slug}: HTTP {resp.status_code}")
@@ -80,6 +89,11 @@ def parse_job(raw: dict, company_slug: str) -> dict:
     job_type = normalize_job_type(employment_type)
     loc_str = location or "Not Specified"
     dept = department or team
+    
+    # Extract skills from description
+    skills_text = extract_skills_from_text(description_text)
+    if not skills_text or skills_text == "Not Specified":
+        skills_text = extract_skills_from_text(dept)
 
     return {
         "title": title,
@@ -90,7 +104,7 @@ def parse_job(raw: dict, company_slug: str) -> dict:
         "salary": "Not Disclosed",
         "description": description_text[:5000] if description_text else "No description available.",
         "requirements": "Not Specified",
-        "preferredSkills": "Not Specified",
+        "preferredSkills": skills_text,
         "responsibilities": "Not Specified",
         "applyLink": apply_link,
         "featuredImage": "",
@@ -107,7 +121,7 @@ def parse_job(raw: dict, company_slug: str) -> dict:
         "benefits": "",
         "aboutCompany": "",
         "notificationTitle": f"New Job at {company_name}",
-        "rawPostedDate": raw.get("publishedDate") or raw.get("updatedAt") or raw.get("createdAt") or "",
+        "rawPostedDate": raw.get("publishedAt") or raw.get("publishedDate") or raw.get("updatedAt") or raw.get("createdAt") or "",
     }
 
 
