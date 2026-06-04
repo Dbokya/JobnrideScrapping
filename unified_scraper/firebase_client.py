@@ -5,7 +5,7 @@ from firebase_admin import credentials, firestore, messaging
 from datetime import datetime
 import pytz
 import re
-from normalizer import extract_skills_from_text
+from normalizer import extract_skills_from_text, parse_posted_date
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -85,6 +85,9 @@ def save_job(job_data: dict, job_counter: int) -> bool:
     unique_jobid = f"apijob{job_counter:04d}"
     job_hash = make_job_hash(company, title, location)
 
+    # Job's real posting date from the source (None if unknown/unparseable)
+    original_posted_at = parse_posted_date(job_data.get("rawPostedDate", ""))
+
     job_type = job_data.get("jobType", "Full-Time")
     skills_str = _clean_html_in_text(job_data.get("preferredSkills", "Not Specified"))
     
@@ -158,8 +161,10 @@ def save_job(job_data: dict, job_counter: int) -> bool:
         "jobFor": job_data.get("jobFor", "experienced"),
 
         # ── Timestamps ────────────────────────────────────────────────────
-        "createdAt": now,
-        "postedAt": now,
+        "createdAt": now,                       # when this scraper saved it
+        "postedAt": now,                        # scrape time (legacy field)
+        "originalPostedAt": original_posted_at,  # real source posting date (or None)
+        "rawPostedDate": job_data.get("rawPostedDate", ""),  # unparsed source value
     }
 
     db.collection("Directjobs").add(record)

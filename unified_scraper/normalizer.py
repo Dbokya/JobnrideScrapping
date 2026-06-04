@@ -113,6 +113,75 @@ def today_ist() -> date:
     return datetime.now(IST).date()
 
 
+_DATE_FORMATS = [
+    "%Y-%m-%dT%H:%M:%S.%fZ",
+    "%Y-%m-%dT%H:%M:%SZ",
+    "%Y-%m-%dT%H:%M:%S%z",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d",
+    "%d/%m/%Y",
+    "%m/%d/%Y",
+    "%B %d, %Y",
+    "%d %B %Y",
+]
+
+
+def parse_posted_date(raw_date):
+    """
+    Parse a source posting date into a timezone-aware IST datetime.
+    Accepts ISO strings, Unix timestamps (sec/ms), datetime objects, and
+    relative strings ("Posted Today", "Yesterday", "5 days ago", "a week ago").
+    Returns None when the date is missing or cannot be determined.
+    """
+    if raw_date is None or raw_date == "":
+        return None
+    try:
+        now = datetime.now(IST)
+
+        if isinstance(raw_date, (int, float)):
+            ts = raw_date / 1000 if raw_date > 1e10 else raw_date
+            return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(IST)
+
+        if isinstance(raw_date, datetime):
+            if raw_date.tzinfo is None:
+                raw_date = pytz.utc.localize(raw_date)
+            return raw_date.astimezone(IST)
+
+        if isinstance(raw_date, str):
+            s = raw_date.strip()
+            sl = s.lower()
+            if not s or sl in ["null", "none", "n/a"]:
+                return None
+            # Relative strings
+            if any(w in sl for w in ["today", "just now", "an hour", "hours ago",
+                                     "minutes ago", "minute ago"]):
+                return now
+            if "yesterday" in sl:
+                return now - timedelta(days=1)
+            m = re.search(r"(\d+)\s+days?\s+ago", sl)
+            if m:
+                return now - timedelta(days=int(m.group(1)))
+            if "week" in sl:
+                weeks = re.search(r"(\d+)\s+weeks?\s+ago", sl)
+                return now - timedelta(weeks=int(weeks.group(1)) if weeks else 1)
+            if "month" in sl:
+                months = re.search(r"(\d+)\s+months?\s+ago", sl)
+                return now - timedelta(days=30 * (int(months.group(1)) if months else 1))
+            # Absolute formats
+            for fmt in _DATE_FORMATS:
+                try:
+                    dt = datetime.strptime(s[:26], fmt)
+                    if dt.tzinfo is None:
+                        dt = pytz.utc.localize(dt)
+                    return dt.astimezone(IST)
+                except ValueError:
+                    continue
+    except Exception:
+        return None
+    return None
+
+
 def is_posted_today(raw_date) -> bool:
     """
     Returns True if raw_date falls within the recency window (today, or today +
