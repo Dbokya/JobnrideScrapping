@@ -169,9 +169,14 @@ def save_job(job_data: dict, job_counter: int) -> bool:
 
     db.collection("Directjobs").add(record)
     print(f"✅ Saved [{unique_jobid}]: {title[:55]} @ {company}")
-    return True
+    return unique_jobid
 
-def send_notification(title: str, body: str):
+def send_notification(title: str, body: str, data: dict = None):
+    """
+    Send an FCM push to all registered devices.
+    `data` is an optional payload (e.g. deep-link info) delivered to the app on
+    tap. FCM requires all data values to be strings, so they're coerced here.
+    """
     db = get_db()
     tokens = []
     users = db.collection("users").stream()
@@ -186,6 +191,9 @@ def send_notification(title: str, body: str):
         print("⚠ No device tokens found.")
         return
 
+    # FCM data payload must be a flat dict of strings
+    data_payload = {str(k): str(v) for k, v in (data or {}).items()}
+
     # FCM allows max 500 tokens per multicast
     chunk_size = 500
     success_total = 0
@@ -194,12 +202,16 @@ def send_notification(title: str, body: str):
         chunk = tokens[i:i + chunk_size]
         message = messaging.MulticastMessage(
             notification=messaging.Notification(title=title, body=body),
+            data=data_payload,
             android=messaging.AndroidConfig(
                 priority="high",
                 notification=messaging.AndroidNotification(
                     sound="default",
                     channel_id="job_alerts",
                     priority="high",
+                    # Lets the Flutter default FCM service route the tap so the
+                    # data payload reaches onMessageOpenedApp for deep-linking.
+                    click_action="FLUTTER_NOTIFICATION_CLICK",
                 ),
             ),
             apns=messaging.APNSConfig(

@@ -195,20 +195,25 @@ def run():
     saved_count = 0
     skipped_count = 0
     error_count = 0
-    last_saved_title = None
-    last_saved_company = None
+    # Featured job for the push notification = first job saved this run
+    # (sorted India → Remote → Other, so the most relevant one).
+    featured_jobid = None
+    featured_title = None
+    featured_company = None
     source_saved: dict = {}   # top-level source name → saved count
 
     for job in sorted_jobs:
         try:
-            saved = save_job(job, job_counter)
+            saved = save_job(job, job_counter)   # returns jobid (str) or False
             # Normalize source key: "workday/infosys" → "workday"
             src_key = job.get("source", "unknown").split("/")[0]
             if saved:
                 job_counter += 1
                 saved_count += 1
-                last_saved_title = job.get("title", "")
-                last_saved_company = job.get("company", "")
+                if featured_jobid is None:
+                    featured_jobid = saved
+                    featured_title = job.get("title", "")
+                    featured_company = job.get("company", "")
                 source_saved[src_key] = source_saved.get(src_key, 0) + 1
             else:
                 skipped_count += 1
@@ -217,15 +222,22 @@ def run():
             error_count += 1
         time.sleep(0.1)
 
-    # ── FCM Push Notification ────────────────────────────────────────────────
-    if saved_count > 0 and last_saved_title:
+    # ── FCM Push Notification (deep-links to the featured job) ────────────────
+    if saved_count > 0 and featured_jobid:
         try:
             notif_title = "🚀 New IT Jobs Alert!"
             notif_body = (
                 f"{saved_count} new IT job{'s' if saved_count > 1 else ''} added! "
-                f"Latest: {last_saved_title[:40]} @ {last_saved_company}"
+                f"Latest: {featured_title[:40]} @ {featured_company}"
             )
-            send_notification(notif_title, notif_body)
+            deep_link = f"jobnride://job/{featured_jobid}"
+            send_notification(notif_title, notif_body, data={
+                "type": "new_job",
+                "jobid": featured_jobid,
+                "deepLink": deep_link,
+                "click_action": "FLUTTER_NOTIFICATION_CLICK",
+            })
+            print(f"   🔗 Deep link: {deep_link}")
         except Exception as e:
             print(f"\n⚠ Notification failed: {e}")
     else:
