@@ -6,6 +6,7 @@ from datetime import datetime
 import pytz
 import re
 from normalizer import extract_skills_from_text, parse_posted_date
+from ai_parser import parse_job_sections
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -90,20 +91,38 @@ def save_job(job_data: dict, job_counter: int) -> bool:
 
     job_type = job_data.get("jobType", "Full-Time")
     skills_str = _clean_html_in_text(job_data.get("preferredSkills", "Not Specified"))
-    
-    # Fallback: Extract skills from description if not found or "Not Specified"
+
+    # Fallback: extract skills from description if not found or "Not Specified"
     if not skills_str or skills_str == "Not Specified":
         description = job_data.get("description", "")
         if description:
             extracted_skills = extract_skills_from_text(description)
             if extracted_skills and extracted_skills != "Not Specified":
                 skills_str = extracted_skills
-    
+
     # Build a keySkills list (array) from comma-separated skills string
     key_skills_list = (
         [s.strip() for s in skills_str.split(",") if s.strip() and s.strip() != "Not Specified"]
         if skills_str and skills_str != "Not Specified" else []
     )
+
+    # ── AI section parser (Phase 1 HTML + Phase 2 GPT-4o mini fallback) ──────
+    raw_html = job_data.get("rawDescriptionHtml", "")
+    plain_desc = job_data.get("description", "")
+    ai_sections = parse_job_sections(raw_html=raw_html, plain_text=plain_desc)
+
+    def _pick(field: str, fallback: str = "") -> str:
+        """Use scraper value if meaningful, else use AI-parsed value."""
+        scraper_val = (job_data.get(field) or "").strip()
+        if scraper_val and scraper_val not in ("Not Specified", "Not Disclosed", "N/A"):
+            return scraper_val
+        return (ai_sections.get(field) or "").strip() or fallback
+
+    responsibilities_val = _pick("responsibilities", "Not Specified")
+    requirements_val     = _pick("requirements",     "Not Specified")
+    benefits_val         = _pick("benefits",         "")
+    about_company_val    = _pick("aboutCompany",     "")
+    salary_val           = _pick("salary",           "Not Disclosed")
 
     record = {
         # ── Core identity ──────────────────────────────────────────────────
@@ -119,7 +138,7 @@ def save_job(job_data: dict, job_counter: int) -> bool:
         "title": title,
         "company": company,
         "companyLogo": job_data.get("featuredImage", "") or job_data.get("companyLogo", ""),
-        "aboutCompany": _clean_html_in_text(job_data.get("aboutCompany", "")),
+        "aboutCompany": _clean_html_in_text(about_company_val),
         "location": location,
         "country": job_data.get("country", ""),
         "workMode": job_data.get("workMode", "On-site"),       # Remote / Hybrid / On-site
@@ -135,8 +154,8 @@ def save_job(job_data: dict, job_counter: int) -> bool:
         "totalOpenings": job_data.get("totalOpenings", "Not Specified"),
 
         # ── Compensation ──────────────────────────────────────────────────
-        "salary": job_data.get("salary", "Not Disclosed"),
-        "benefits": _clean_html_in_text(job_data.get("benefits", "")),
+        "salary": salary_val,
+        "benefits": _clean_html_in_text(benefits_val),
 
         # ── Skills ────────────────────────────────────────────────────────
         "preferredSkills": skills_str,
@@ -145,8 +164,8 @@ def save_job(job_data: dict, job_counter: int) -> bool:
 
         # ── Full description sections ──────────────────────────────────────
         "description": _clean_html_in_text(job_data.get("description", "")),
-        "responsibilities": _clean_html_in_text(job_data.get("responsibilities", "Not Specified")),
-        "requirements": _clean_html_in_text(job_data.get("requirements", "Not Specified")),
+        "responsibilities": _clean_html_in_text(responsibilities_val),
+        "requirements": _clean_html_in_text(requirements_val),
 
         # ── Apply ─────────────────────────────────────────────────────────
         "applyLink": apply_link,

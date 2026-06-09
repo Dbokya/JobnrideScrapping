@@ -97,6 +97,8 @@ def parse_job(raw: dict, company_slug: str) -> dict:
 
     content_html = raw.get("content", "") or ""
     description_text = clean_html(content_html)
+    # Keep raw HTML so ai_parser can extract structured sections from it
+    raw_description_html = content_html
 
     # Extract metadata blocks
     metadata = raw.get("metadata", []) or []
@@ -138,6 +140,7 @@ def parse_job(raw: dict, company_slug: str) -> dict:
         "jobType": job_type,
         "salary": normalize_salary(salary_raw),
         "description": description_text[:5000] if description_text else "No description available.",
+        "rawDescriptionHtml": raw_description_html,
         "requirements": "Not Specified",
         "preferredSkills": skills_text,
         "responsibilities": "Not Specified",
