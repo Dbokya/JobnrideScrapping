@@ -102,6 +102,7 @@ def parse_job(raw: dict, company_slug: str) -> dict:
         "jobType": job_type,
         "salary": "Not Disclosed",
         "description": full_description,
+        "rawDescriptionHtml": description_blocks,
         "requirements": requirements or "Not Specified",
         "preferredSkills": skills_str,
         "responsibilities": responsibilities or "Not Specified",

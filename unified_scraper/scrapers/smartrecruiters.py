@@ -91,7 +91,8 @@ def parse_job(raw: dict, company_name: str, company_id: str) -> dict:
     if detail:
         job_ad = detail.get("jobAd", {}) or {}
         sections = job_ad.get("sections", {}) or {}
-        description_text = clean_html(sections.get("jobDescription", {}).get("text", "") or "")
+        raw_description_html = sections.get("jobDescription", {}).get("text", "") or ""
+        description_text = clean_html(raw_description_html)
         requirements_text = clean_html(sections.get("qualifications", {}).get("text", "") or "")
         responsibilities_text = clean_html(sections.get("additionalInformation", {}).get("text", "") or "")
         # Try to extract skills section
@@ -124,6 +125,7 @@ def parse_job(raw: dict, company_name: str, company_id: str) -> dict:
         "jobType": job_type,
         "salary": "Not Disclosed",
         "description": full_description,
+        "rawDescriptionHtml": raw_description_html if detail else "",
         "requirements": requirements_text[:1000] if requirements_text else "Not Specified",
         "preferredSkills": skills_text or "Not Specified",
         "responsibilities": responsibilities_text[:1000] if responsibilities_text else "Not Specified",

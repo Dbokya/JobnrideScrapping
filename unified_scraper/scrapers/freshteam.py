@@ -160,6 +160,7 @@ def parse_job(raw: dict, company_name: str, subdomain: str) -> dict:
         "jobType": job_type,
         "salary": "Not Disclosed",
         "description": full_description,
+        "rawDescriptionHtml": description_html,
         "requirements": requirements_text[:1000] if requirements_text else "Not Specified",
         "preferredSkills": skills_text,
         "responsibilities": responsibilities_text[:1000] if responsibilities_text else "Not Specified",

@@ -92,6 +92,7 @@ def parse_feed(xml_text: str, category: str) -> list:
                 "jobType": "Remote",
                 "salary": "Not Disclosed",
                 "description": description_text[:5000] if description_text else "No description available.",
+                "rawDescriptionHtml": description_html,
                 "requirements": "Not Specified",
                 "preferredSkills": skills_text,
                 "responsibilities": "Not Specified",

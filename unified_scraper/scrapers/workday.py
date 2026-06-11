@@ -84,8 +84,8 @@ def parse_job(raw: dict, company_name: str, tenant: str, wd_ver: int, board: str
     if isinstance(category, dict):
         category = category.get("descriptor", "")
 
-    description_text = raw.get("jobDescription", {}).get("jobDescription", "") if isinstance(raw.get("jobDescription"), dict) else ""
-    description_text = clean_html(description_text)
+    raw_description_html = raw.get("jobDescription", {}).get("jobDescription", "") if isinstance(raw.get("jobDescription"), dict) else ""
+    description_text = clean_html(raw_description_html)
 
     job_for = classify_job_for(title, description_text)
 
@@ -105,6 +105,7 @@ def parse_job(raw: dict, company_name: str, tenant: str, wd_ver: int, board: str
         "jobType": job_type,
         "salary": "Not Disclosed",
         "description": description_text[:5000] if description_text else "No description available.",
+        "rawDescriptionHtml": raw_description_html,
         "requirements": "Not Specified",
         "preferredSkills": skills_text,
         "responsibilities": "Not Specified",

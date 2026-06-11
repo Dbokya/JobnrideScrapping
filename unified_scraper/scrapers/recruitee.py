@@ -55,7 +55,8 @@ def parse_job(raw: dict, company_name: str, company_slug: str) -> dict:
     department = raw.get("department") or ""
     job_type_raw = raw.get("employment_type_code") or raw.get("employment_type") or ""
 
-    description_text = clean_html(raw.get("description") or "")
+    raw_description_html = raw.get("description") or ""
+    description_text = clean_html(raw_description_html)
     requirements_text = clean_html(raw.get("requirements") or "")
 
     job_for = classify_job_for(title, description_text)
@@ -90,6 +91,7 @@ def parse_job(raw: dict, company_name: str, company_slug: str) -> dict:
         "jobType": job_type,
         "salary": normalize_salary(salary_raw),
         "description": full_description,
+        "rawDescriptionHtml": raw_description_html,
         "requirements": requirements_text[:1000] if requirements_text else "Not Specified",
         "preferredSkills": skills_text or "Not Specified",
         "responsibilities": "Not Specified",

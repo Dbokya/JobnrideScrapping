@@ -166,6 +166,7 @@ def parse_job(raw: dict, country_name: str) -> dict:
         "jobType": job_type,
         "salary": salary,
         "description": description_text[:5000] if description_text else "No description available.",
+        "rawDescriptionHtml": description_html,
         "requirements": "Not Specified",
         "preferredSkills": skills_text,
         "responsibilities": "Not Specified",
