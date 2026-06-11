@@ -142,9 +142,9 @@ def _get_openai_client():
         return _openai_client
     try:
         from openai import OpenAI
-        key = os.environ.get("OPENAI_API_KEY", "")
+        key = os.environ.get("OPEN_AI_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
         if not key:
-            print("  ⚠ OPENAI_API_KEY not set — GPT fallback disabled")
+            print("  ⚠ OPEN_AI_API_KEY not set — GPT extraction disabled")
             return None
         _openai_client = OpenAI(api_key=key)
         return _openai_client
