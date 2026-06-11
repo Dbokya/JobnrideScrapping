@@ -106,15 +106,15 @@ def save_job(job_data: dict, job_counter: int) -> bool:
         if skills_str and skills_str != "Not Specified" else []
     )
 
-    # ── AI section parser (Phase 1 HTML + Phase 2 GPT-4o mini fallback) ──────
-    raw_html = job_data.get("rawDescriptionHtml", "")
+    # ── AI section parser (Phase 1 HTML + GPT-4o mini) ──────────────────────
+    raw_html  = job_data.get("rawDescriptionHtml", "")
     plain_desc = job_data.get("description", "")
     ai_sections = parse_job_sections(raw_html=raw_html, plain_text=plain_desc)
 
     def _pick(field: str, fallback: str = "") -> str:
         """Use scraper value if meaningful, else use AI-parsed value."""
         scraper_val = (job_data.get(field) or "").strip()
-        if scraper_val and scraper_val not in ("Not Specified", "Not Disclosed", "N/A"):
+        if scraper_val and scraper_val not in ("Not Specified", "Not Disclosed", "N/A", ""):
             return scraper_val
         return (ai_sections.get(field) or "").strip() or fallback
 
@@ -123,6 +123,20 @@ def save_job(job_data: dict, job_counter: int) -> bool:
     benefits_val         = _pick("benefits",         "")
     about_company_val    = _pick("aboutCompany",     "")
     salary_val           = _pick("salary",           "Not Disclosed")
+
+    # Experience: prefer scraper value, then AI-extracted, then normalised bucket
+    experience_val = _pick("experience", "Not Specified")
+
+    # Description: use AI-cleaned 2-3 sentence summary if available,
+    # else fall back to the original plain-text blob
+    ai_description = (ai_sections.get("description") or "").strip()
+    description_val = ai_description if ai_description else plain_desc
+
+    # Skills: merge scraper-detected skills with AI-extracted skills
+    ai_skills_raw = (ai_sections.get("skills") or "").strip()
+    if ai_skills_raw and (not skills_str or skills_str == "Not Specified"):
+        skills_str = ai_skills_raw
+        key_skills_list = [s.strip() for s in skills_str.split(",") if s.strip()]
 
     record = {
         # ── Core identity ──────────────────────────────────────────────────
@@ -148,7 +162,7 @@ def save_job(job_data: dict, job_counter: int) -> bool:
         "category": job_data.get("category", ""),
 
         # ── Requirements ──────────────────────────────────────────────────
-        "experience": job_data.get("experience", "Not Specified"),
+        "experience": experience_val,
         "educationRequirement": job_data.get("educationRequirement", "Not Specified"),
         "noticePeriod": job_data.get("noticePeriod", "Not Specified"),
         "totalOpenings": job_data.get("totalOpenings", "Not Specified"),
@@ -163,7 +177,7 @@ def save_job(job_data: dict, job_counter: int) -> bool:
         "keySkills": key_skills_list,                           # array for filtering/tags
 
         # ── Full description sections ──────────────────────────────────────
-        "description": _clean_html_in_text(job_data.get("description", "")),
+        "description": _clean_html_in_text(description_val),
         "responsibilities": _clean_html_in_text(responsibilities_val),
         "requirements": _clean_html_in_text(requirements_val),
 

@@ -154,22 +154,24 @@ def _get_openai_client():
 
 
 _GPT_PROMPT = """\
-Extract structured information from the job posting below.
-Return ONLY valid JSON — no markdown, no explanation.
+Extract structured information from this job posting. Return ONLY valid JSON, no markdown, no explanation.
 
 JSON keys (use empty string "" if not found):
-- "responsibilities": bullet list, each item on its own line starting with "• "
-- "requirements": bullet list, each item on its own line starting with "• "
-- "benefits": comma-separated list of perks/benefits
-- "aboutCompany": 1-2 sentences describing the company
-- "salary": exact salary or range if mentioned (e.g. "15-20 LPA", "$80k-$100k")
+- "description": 2-3 sentence summary of the role and company. Do NOT include responsibilities or requirements here. Plain text only.
+- "responsibilities": bullet list of what the person will do, each item on its own line starting with "• ". Plain text only.
+- "requirements": bullet list of what skills/experience are needed, each item on its own line starting with "• ". Plain text only.
+- "benefits": comma-separated list of perks/benefits (e.g. "Health insurance, flexible hours, stock options")
+- "aboutCompany": 1-2 sentences describing the company. Plain text only.
+- "salary": exact salary or range if mentioned anywhere in the text (e.g. "15-20 LPA", "₹12-18 LPA", "$80k-$100k", "Competitive"). Empty string if not found.
+- "experience": years of experience required as a range string (e.g. "2-5 years", "5+ years", "0-2 years", "Fresher"). Empty string if not found.
+- "skills": comma-separated list of specific technical skills mentioned (e.g. "Python, AWS, Docker, PostgreSQL")
 
-Job posting:
+Job posting text:
 """
 
 
 def _call_gpt(plain_text: str) -> dict:
-    """Call GPT-4o mini to extract sections from plain text. Returns {} on failure."""
+    """Call GPT-4o mini to extract all structured fields. Returns {} on failure."""
     client = _get_openai_client()
     if not client:
         return {}
@@ -177,9 +179,9 @@ def _call_gpt(plain_text: str) -> dict:
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": _GPT_PROMPT + plain_text[:3500]}],
+            messages=[{"role": "user", "content": _GPT_PROMPT + plain_text[:4000]}],
             temperature=0,
-            max_tokens=900,
+            max_tokens=1200,
             response_format={"type": "json_object"},
         )
         raw = response.choices[0].message.content or "{}"
@@ -195,36 +197,48 @@ def _call_gpt(plain_text: str) -> dict:
 
 def parse_job_sections(raw_html: str = "", plain_text: str = "") -> dict:
     """
-    Combined Phase 1 + Phase 2 section extractor.
+    Combined Phase 1 + GPT extractor.
 
-    Phase 1 (free):   HTML structure parsing via BeautifulSoup.
-    Phase 2 (~$0.001): GPT-4o mini — only called when Phase 1 finds neither
-                        responsibilities nor requirements.
+    Phase 1 (free):      BeautifulSoup HTML parsing — extracts responsibilities
+                         and requirements from heading structure when available.
+
+    GPT-4o mini (~$0.001): Always called when plain_text is available to extract
+                            description summary, salary, experience, skills, and
+                            fill any gaps Phase 1 missed.
 
     Args:
         raw_html:   Raw HTML from the scraper (before clean_html destroys it).
-        plain_text: Already-cleaned plain text description (Phase 2 input).
+        plain_text: Already-cleaned plain text description.
 
     Returns:
-        dict with any subset of:
-          responsibilities, requirements, benefits, aboutCompany, salary
-        All values are plain text strings ready to save to Firestore.
+        dict with populated fields:
+          description, responsibilities, requirements, benefits,
+          aboutCompany, salary, experience, skills
     """
     sections: dict[str, str] = {}
 
-    # ── Phase 1 ─────────────────────────────────────────────────────────────
+    # ── Phase 1: HTML structure parsing (free) ───────────────────────────────
     if raw_html:
         sections = parse_sections_from_html(raw_html)
 
-    # ── Phase 2 fallback ────────────────────────────────────────────────────
-    has_core = sections.get("responsibilities") or sections.get("requirements")
-    if not has_core and plain_text and len(plain_text.strip()) > 200:
-        print("  🤖 Phase 1 found no sections — calling GPT-4o mini...")
+    # ── GPT-4o mini: always run for salary/experience/description/skills ─────
+    if plain_text and len(plain_text.strip()) > 150:
+        print("  🤖 GPT-4o mini extracting fields...")
         ai = _call_gpt(plain_text)
-        for key in ("responsibilities", "requirements", "benefits", "aboutCompany", "salary"):
+
+        # GPT fills salary, experience, skills, description always
+        # For responsibilities/requirements, only fill if Phase 1 missed them
+        for key in ("salary", "experience", "skills", "description", "benefits", "aboutCompany"):
             val = (ai.get(key) or "").strip()
-            if val and not sections.get(key):
+            if val:
                 sections[key] = val
+
+        # Phase 1 results take priority for responsibilities/requirements
+        for key in ("responsibilities", "requirements"):
+            if not sections.get(key):
+                val = (ai.get(key) or "").strip()
+                if val:
+                    sections[key] = val
 
     return sections
 
