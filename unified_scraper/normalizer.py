@@ -47,17 +47,29 @@ NON_INDIA_LOCATION_KEYWORDS = {
     "amsterdam", "stockholm", "oslo", "copenhagen", "helsinki",
     "zurich", "vienna", "warsaw", "lisbon", "madrid", "barcelona",
     "milan", "rome", "dublin", "edinburgh", "manchester",
+    # explicit restriction phrases seen in job listings
+    "usa", "singapore", "us only", "uk only", "canada only",
+    "australia only", "europe only", "us residents", "united states only",
+    "north america", "latin america", "apac", "emea",
 }
 
 
 def is_india_or_remote(country: str, location: str) -> bool:
-    """Returns True if job is India-based or remote/worldwide.
-    Remote location always wins — a remote job at a US company is valid.
+    """Returns True if job is India-based or genuinely open remote (no country restriction).
+    Blocks jobs where location says 'Remote' but pins it to a non-India country
+    e.g. 'Remote - USA', 'Remote, Singapore', 'Remote (US only)'.
     """
     country_l = (country or "").lower().strip()
     location_l = (location or "").lower()
 
-    # Remote/worldwide in location always passes, regardless of country
+    # Block first if a non-India country/city is explicitly in the location string.
+    # This catches "Remote - USA", "Remote, Singapore", "Remote (UK only)" etc.
+    if any(kw in location_l for kw in NON_INDIA_LOCATION_KEYWORDS):
+        return False
+    if any(kw in location_l for kw in NON_INDIA_COUNTRIES):
+        return False
+
+    # Now safe to treat plain remote/worldwide as valid for India applicants
     if any(kw in location_l for kw in REMOTE_LOCATION_KEYWORDS):
         return True
 
