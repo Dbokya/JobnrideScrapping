@@ -86,13 +86,76 @@ def fetch_featured_image_url(media_id, retries=3):
     
     return None
 
-def classify_job(title, content):
-    text = f"{title} {content}".lower()
-    if re.search(r"\bintern(ship)?\b", text):
+def classify_job(title, experience_normalized=""):
+    """Classify based on title and the already-extracted experience field only.
+    Never scan the full content body — that causes false-positives when a job
+    says 'freshers can also apply' but actually requires 3-5 years.
+    """
+    title_lower = title.lower()
+    exp = (experience_normalized or "").lower().strip()
+
+    # Title is the strongest signal
+    if re.search(r"\bintern(ship)?\b", title_lower):
         return "intern"
-    if re.search(r"\b(fresher|entry level|junior)\b", text):
+    if re.search(r"\b(fresher|entry[\s\-]?level)\b", title_lower):
         return "fresher"
+
+    # Use the normalized experience field
+    if not exp or exp in ("not specified", "n/a", "na", "-", ""):
+        return "experienced"  # unknown experience → don't assume fresher
+
+    if re.search(r"\bintern(ship)?\b", exp):
+        return "intern"
+
+    if re.search(r"\b(fresher|freshers|entry[\s\-]?level|no experience|zero experience|trainee)\b", exp):
+        return "fresher"
+
+    # Only "0-2 years" (the scraper's normalized form for 0–2 yr experience) is fresher
+    if exp == "0-2 years":
+        return "fresher"
+
     return "experienced"
+
+def extract_experience_from_text(text):
+    """
+    Last-resort regex scan of raw job text to find experience requirements.
+    Runs when AI and table extraction both return nothing useful.
+    Returns a raw string like "2-5 years" or "fresher" or None.
+    """
+    t = text.lower()
+
+    # Numeric checks FIRST — prevents "freshers can also apply" overriding "5-8 years"
+    m = re.search(r'(\d+)\s*(?:to|[-–])\s*(\d+)\s*(?:years?|yrs?)', t)
+    if m:
+        return f"{m.group(1)}-{m.group(2)} years"
+
+    m = re.search(
+        r'(?:minimum|min\.?|at least|more than|over)?\s*(\d+)\s*\+?\s*(?:years?|yrs?)\s*(?:of\s*)?(?:experience|exp)',
+        t,
+    )
+    if m:
+        return f"{m.group(1)}+ years"
+
+    m = re.search(r'(\d+)\s*(?:years?|yrs?)\s*(?:of\s*)?(?:experience|exp)', t)
+    if m:
+        return f"{m.group(1)} years"
+
+    m = re.search(r'(?:experience|exp(?:erience)?)[\s:–\-]+([^\n,;|]{2,40})', t)
+    if m:
+        snippet = m.group(1).strip()
+        if any(c.isdigit() for c in snippet) or re.search(r'\b(fresher|intern|entry)\b', snippet):
+            return snippet
+
+    # Keyword-only signals — only when no numeric experience was found above
+    if re.search(r'\bintern(ship)?\b', t):
+        return "internship"
+    if re.search(r'\b(no experience required|zero experience|freshers? (only|preferred|welcome))\b', t):
+        return "fresher"
+    if re.search(r'\b(entry[\s\-]?level)\b', t):
+        return "fresher"
+
+    return None
+
 
 def normalize_experience(experience_text):
     """Normalize experience to standard year ranges: 0-2, 2-5, 5-10, 10+"""
@@ -421,8 +484,13 @@ def extract_job_details_with_ai(title, content_html, default_link):
 
     if not need_ai:
         print(f"\n✅ Table (merged) contains required fields and is sufficiently detailed - using table data directly")
-        # Build job details from table data
-        experience_normalized = normalize_experience(table_data.get("experience", "Not Specified"))
+        # Extract experience — fallback to regex scan if table returned nothing
+        raw_exp = table_data.get("experience", "")
+        if not raw_exp or raw_exp.lower() in ("not specified", "n/a", "na", "-", ""):
+            raw_exp = extract_experience_from_text(clean_text) or raw_exp
+            if raw_exp:
+                print(f"✓ Regex-extracted experience from text: '{raw_exp}'")
+        experience_normalized = normalize_experience(raw_exp or "Not Specified")
 
         job_details = {
             "company": table_data.get("company", "Not Specified"),
@@ -471,10 +539,12 @@ CRITICAL INSTRUCTIONS:
    - Include work mode if specified (e.g., "Mumbai (Remote)", "Pune (Hybrid)")
 
 3. EXPERIENCE:
-   - Extract experience requirement clearly
-   - Format consistently: "0-2 years", "2-5 years", "5-10 years", "10+ years"
-   - For freshers: use "0-2 years"
-   - For experienced: extract exact range mentioned
+   - Search the ENTIRE text for experience requirements — check table rows, bullet points, eligibility sections, and any sentence containing "years", "yrs", "experience", "exp"
+   - Format MUST be one of: "0-2 years", "2-5 years", "5-10 years", "10+ years", "fresher", "internship"
+   - For freshers / entry-level / no experience required: use "0-2 years"
+   - For "2 years" or "1-2 years" → "0-2 years"; for "3-5 years" → "2-5 years"; for "6-10 years" → "5-10 years"
+   - NEVER return "Not Specified" if any experience clue exists anywhere in the text
+   - Only use "Not Specified" if there is truly zero mention of experience anywhere
 
 4. JOB TYPE:
    - Use standardized terms: "Full-Time", "Part-Time", "Internship", "Contract", "Freelance"
@@ -557,10 +627,18 @@ Return ONLY the JSON object, no explanations or markdown."""
         if len(description.split()) < 120:
             description = (description + "\n\n" + clean_text[:400]).strip()
 
+        # Extract experience with regex fallback
+        skip_ai_exp = table_data.get('experience', '')
+        if not skip_ai_exp or skip_ai_exp.lower() in ("not specified", "n/a", "na", "-", ""):
+            skip_ai_exp = extract_experience_from_text(clean_text) or ''
+            if skip_ai_exp:
+                print(f"✓ Regex-extracted experience (SKIP_AI): '{skip_ai_exp}'")
+        skip_ai_exp = normalize_experience(skip_ai_exp or "Not Specified")
+
         job_details = {
             "company": table_data.get('company', 'Not Specified'),
             "location": table_data.get('location', 'Not Specified'),
-            "experience": table_data.get('experience', 'Not Specified'),
+            "experience": skip_ai_exp,
             "jobType": table_data.get('jobType', 'Not Specified'),
             "salary": table_data.get('salary', 'Not Disclosed'),
             "description": description,
@@ -620,6 +698,12 @@ Return ONLY the JSON object, no explanations or markdown."""
 
             # Normalize experience to standard year ranges
             experience = job_details.get("experience", "Not Specified")
+            # If AI returned nothing useful, scan raw text as last resort
+            if not experience or experience.lower() in ("not specified", "n/a", "na", "-", ""):
+                raw_exp = extract_experience_from_text(clean_text)
+                if raw_exp:
+                    experience = raw_exp
+                    print(f"✓ Regex-extracted experience from text: '{experience}'")
             normalized_exp = normalize_experience(experience)
             if normalized_exp != experience:
                 job_details["experience"] = normalized_exp
@@ -738,16 +822,16 @@ def save_job(job):
         return "DUPLICATE"
 
     ai_data = extract_job_details_with_ai(clean_title, content_html, link)
-    
+
     # Validate company name - try to extract from URL if not found
     company_name = ai_data.get("company", "").strip()
     invalid_companies = ["not specified", "unknown", "company", "", "n/a", "na", "not available"]
-    
+
     if not company_name or company_name.lower() in invalid_companies:
         # Try to extract company name from apply link as fallback
         apply_link = ai_data.get("applyLink", link)
         company_from_url = extract_company_from_url(apply_link)
-        
+
         if company_from_url:
             ai_data["company"] = company_from_url
             company_name = company_from_url
@@ -755,9 +839,10 @@ def save_job(job):
         else:
             print(f"❌ Skipped: {clean_title[:60]}... (Company name not found)")
             return None
-    
-    # Add jobFor classification
-    job_for = classify_job(clean_title, content_html)
+
+    # Classify AFTER AI extraction so we use the normalized experience field, not raw HTML
+    # (avoids false-positives from "freshers can also apply" phrases in body text)
+    job_for = classify_job(clean_title, ai_data.get("experience", ""))
     ai_data["jobFor"] = job_for
     
     # Update notification title with correct company name
