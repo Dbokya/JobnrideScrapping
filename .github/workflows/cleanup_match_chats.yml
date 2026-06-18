@@ -1,0 +1,33 @@
+name: Cleanup Match Chats
+
+on:
+  schedule:
+    # Hourly — deletes match_connect chats whose 30h window has passed
+    - cron: "30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create Firebase Key
+        run: |
+          mkdir -p serviceaccount
+          echo '${{ secrets.FIREBASE_KEY }}' > serviceaccount/jobnride-97d77-firebase-adminsdk-fbsvc-20ce6e6129.json
+
+      - name: Delete expired match chats
+        run: python cleanup_match_chats.py
