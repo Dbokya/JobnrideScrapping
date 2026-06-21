@@ -54,11 +54,11 @@ def cleanup():
     now = datetime.datetime.now(datetime.timezone.utc)
     print(f"[cleanup] Scanning expired match_connect chats at {now.isoformat()}")
 
-    query = (
-        db.collection("chats")
-        .where("kind", "==", "match_connect")
-        .where("expiresAt", "<=", now)
-    )
+    # Single-field equality query → uses Firestore's automatic index, so this
+    # needs NO composite index. We filter the 30h expiry in Python below.
+    # (A two-field where(kind==).where(expiresAt<=) would require a composite
+    # index and fail with FailedPrecondition until it's created.)
+    query = db.collection("chats").where("kind", "==", "match_connect")
 
     chats = list(query.stream())
     if not chats:
@@ -67,10 +67,22 @@ def cleanup():
 
     total_chats = 0
     total_msgs = 0
+    skipped = 0
     for chat in chats:
         chat_ref = chat.reference
         data = chat.to_dict() or {}
         chat_id = chat.id
+
+        # Only delete chats whose 30h window has passed.
+        exp = data.get("expiresAt")
+        exp_dt = exp if isinstance(exp, datetime.datetime) else (
+            exp.to_datetime() if hasattr(exp, "to_datetime") else None)
+        if exp_dt is not None:
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=datetime.timezone.utc)
+            if exp_dt > now:
+                skipped += 1
+                continue
 
         # 1) subcollections
         msgs = delete_subcollection(chat_ref, "messages")
@@ -99,7 +111,8 @@ def cleanup():
         total_msgs += msgs
         print(f"[cleanup] Deleted chat {chat_id} ({msgs} messages)")
 
-    print(f"[cleanup] Done. Removed {total_chats} chats, {total_msgs} messages.")
+    print(f"[cleanup] Done. Removed {total_chats} chats, {total_msgs} messages. "
+          f"Skipped {skipped} not-yet-expired.")
 
 
 if __name__ == "__main__":
