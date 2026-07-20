@@ -44,4 +44,5 @@ jobs:
           ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
           ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
           THEMUSE_API_KEY: ${{ secrets.THEMUSE_API_KEY }}
+          OPEN_AI_API_KEY: ${{ secrets.OPEN_AI_API_KEY }}
         run: python main.py
